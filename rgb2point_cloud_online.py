@@ -106,7 +106,7 @@ def plane_segmentation(pcd: o3d.geometry.PointCloud) -> o3d.geometry.PointCloud:
         利用RANSAC算法进行点云平面分割
     """
     # 假设 pcd_data_o3d 是经过融合和过滤后的Open3D点云对象
-    plane_model, inliers = pcd.segment_plane(distance_threshold=0.01,
+    plane_model, inliers = pcd.segment_plane(distance_threshold=0.001,
                                                     ransac_n=3,
                                                     num_iterations=1000)
     # inliers 是属于平面的点的索引
@@ -118,7 +118,11 @@ def filter_background(pcd: o3d.geometry.PointCloud) -> o3d.geometry.PointCloud:
     """
         利用边界框过滤(Bounding Box Filtering)去掉背景点云
     """
-    
+    min_bound = np.array([-0.5, -0.5, 0.0])
+    max_bound = np.array([0.5, 0.5, 1.5])
+    bbox = o3d.geometry.AxisAlignedBoundingBox(min_bound, max_bound)
+    pcd_cropped = pcd.crop(bbox)
+    return pcd_cropped
 
 if __name__ == '__main__':
     # 创建虚拟输入数据
@@ -173,6 +177,10 @@ if __name__ == '__main__':
         rgb_np, depth_np, K_mat, cam_pos, cam_target
     )
     print(f"成功生成点云， 包含{len(point_cloud.points)}个点")
+    
+    # 边界框过滤
+    point_cloud = filter_background(point_cloud)
+    
     # 点云平面分割
     point_cloud = plane_segmentation(point_cloud)
 
