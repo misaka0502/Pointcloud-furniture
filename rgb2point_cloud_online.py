@@ -90,14 +90,14 @@ def rgbd_to_point_cloud(rgb_image, depth_image, K, cam_pos, cam_target, up_axis=
     # 创建Open3D点云对象
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points_world_frame)
-    pcd.colors = o3d.utility.Vector3dVector(colors)
+    # pcd.colors = o3d.utility.Vector3dVector(colors)
     # # 执行最远点采样 (FPS)
     # num_samples = 10000
     # print(f"\n正在执行最远点采样，目标点数: {num_samples}...")
     # pcd = pcd.farthest_point_down_sample(num_samples)
     # print(f"FPS 采样后的点云包含 {len(pcd.points)} 个点。")
-    # pcd = pcd.voxel_down_sample(0.01)
-    # print(f"下采样后的点云包含 {len(pcd.points)} 个点。")
+    pcd = pcd.voxel_down_sample(0.01)
+    print(f"下采样后的点云包含 {len(pcd.points)} 个点。")
 
     return pcd
 
@@ -118,7 +118,7 @@ def filter_background(pcd: o3d.geometry.PointCloud) -> o3d.geometry.PointCloud:
     """
         利用边界框过滤(Bounding Box Filtering)去掉背景点云
     """
-    min_bound = np.array([-0.5, -0.5, 0.0])
+    min_bound = np.array([-0.5, -0.5, -0.0])
     max_bound = np.array([0.5, 0.5, 1.5])
     bbox = o3d.geometry.AxisAlignedBoundingBox(min_bound, max_bound)
     pcd_cropped = pcd.crop(bbox)
