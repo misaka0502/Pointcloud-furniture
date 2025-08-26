@@ -5,14 +5,12 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "test class",
+            "name": "test rl env",
             "type": "debugpy",
             "request": "launch",
-            "program": "${workspaceFolder}/test_classification.py",
+            "program": "${workspaceFolder}/furniture-bench/scripts/test_rl_env.py",
             "console": "integratedTerminal",
             "args": [
-                "--log_dir", "pointnet2_ssg_wo_normals",
-                "--gpu", "6"
             ]
         }
     ]
