@@ -11,7 +11,19 @@
             "program": "${workspaceFolder}/furniture-bench/scripts/test_env.py",
             "console": "integratedTerminal",
             "args": [
-                "--input-device", "keyboard"
+                "--input-device", "keyboard",
+                "--display-pcd"
+            ]
+        },
+        {
+            "name": "test rl env module",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "furniture-bench.scripts.test_env",
+            "console": "integratedTerminal",
+            "args": [
+                "--input-device", "keyboard",
+                "--display-pcd"
             ]
         }
     ]

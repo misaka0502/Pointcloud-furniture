@@ -50,7 +50,7 @@ class PointCloudVisualizer:
         
         self.is_initialized = True
         self.keep_running = True
-        self.visualizer.register_key_callback(ord("Q"), self._exit_callback)
+        self.visualizer.register_key_callback(27, self._exit_callback)
         print("Visualizer initialized. Starting animation loop...")
 
     def _exit_callback(self, vis):

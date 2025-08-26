@@ -11,8 +11,13 @@ import cv2
 import torch
 import numpy as np
 import imageio
-import cv2
+from synthesize_pcd.utils.furniture import Furniture, sample_points, draw_point_cloud, record_point_cloud_animation_imageio
+from synthesize_pcd.utils.visualizer import PointCloudVisualizer
+import open3d as o3d
+import time
+from scripts.observation import FULL_OBS
 
+ASEET_PATH = 'synthesize_pcd/assets/furniture_bench/mesh/square_table'
 
 def main():
     parser = argparse.ArgumentParser()
@@ -91,6 +96,13 @@ def main():
         help="GPU device ID used for rendering.",
     )
 
+    parser.add_argument(
+        "--display-pcd",
+        action="store_true",
+        default=False,
+        help="Whether to display point cloud",
+    )
+
     parser.add_argument("--num-envs", type=int, default=1)
     args = parser.parse_args()
 
@@ -100,6 +112,7 @@ def main():
         furniture=args.furniture,
         num_envs=args.num_envs,
         resize_img=not args.high_res,
+        obs_keys=FULL_OBS,
         init_assembled=args.init_assembled,
         record=args.record,
         headless=args.headless,
@@ -112,6 +125,10 @@ def main():
         ctrl_mode='osc'
     )
 
+    if args.display_pcd:
+        furniture = Furniture(ASEET_PATH, device='cuda:0', downsample_voxel_size=0.001)
+        visualizer = PointCloudVisualizer()
+        part_pose = {}
     # Initialize FurnitureSim.
     ob = env.reset()
     done = False
@@ -142,9 +159,29 @@ def main():
             cv2.putText(img_front_bgr, 'Front Camera', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             combined_image = np.hstack((img_wrist_bgr, img_front_bgr))
             cv2.imshow("camera", combined_image)
+            if args.display_pcd:
+                part_pose['square_table_top'] = ob['parts_poses'][:, :7]
+                part_pose['square_table_leg1'] = ob['parts_poses'][:, 7:14]
+                part_pose['square_table_leg2'] = ob['parts_poses'][:, 14:21]
+                part_pose['square_table_leg3'] = ob['parts_poses'][:, 21:28]
+                part_pose['square_table_leg4'] = ob['parts_poses'][:, 28:35]
+                furniture.get_pcd_from_offline_data(part_pose)
+                # pcds_sampled = sample_points(torch.cat(list(furniture.parts_pcds_world.values())), sample_num=4096)
+                first_env_pcds_parts = {
+                    part_name: batched_pcd[0].unsqueeze(0)  # 使用索引 [0] 来选择第一个环境
+                    for part_name, batched_pcd in furniture.parts_pcds_world.items()
+                }
+                pcd_to_sample_single_env = torch.cat(list(first_env_pcds_parts.values()), dim=0)
+                pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
+                pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
+                if visualizer.update_point_cloud(pcds_sampled): # 非阻塞式，循环更新点云
+                    time.sleep(0.01)
+                else: 
+                    break
+            
             key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'): # 如果按下 'q' 键
-                print("'q' key pressed, exiting.")
+            if key == 27: # 如果按下 'esc' 键
+                print("'esc' key pressed, exiting.")
                 break
             
             # 检查窗口是否被手动关闭

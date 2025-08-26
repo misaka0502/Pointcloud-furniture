@@ -75,7 +75,7 @@ def main():
             for part_name, batched_pcd in furniture.parts_pcds_world.items()
         }
         pcd_to_sample_single_env = torch.cat(list(first_env_pcds_parts.values()), dim=0)
-        pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=1024)
+        pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
         pcd_animation_sequence.append(pcds_sampled)
         # draw_point_cloud(pcds_sampled) # 阻塞式，需要关掉窗口才能显示下一个点云
         if visualizer.update_point_cloud(pcds_sampled): # 非阻塞式，循环更新点云
