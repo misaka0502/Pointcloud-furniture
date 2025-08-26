@@ -10,6 +10,8 @@ import gym
 import cv2
 import torch
 import numpy as np
+import imageio
+import cv2
 
 
 def main():
@@ -107,6 +109,7 @@ def main():
         act_rot_repr=args.act_rot_repr,
         compute_device_id=args.compute_device_id,
         graphics_device_id=args.graphics_device_id,
+        ctrl_mode='osc'
     )
 
     # Initialize FurnitureSim.
@@ -131,6 +134,23 @@ def main():
             action, _ = device_interface.get_action()
             action = action_tensor(action)
             ob, rew, done, _ = env.step(action)
+            img_wrist_np = ob['color_image1'].squeeze(0).cpu().numpy().astype(np.uint8)
+            img_front_np = ob['color_image2'].squeeze(0).cpu().numpy().astype(np.uint8)
+            img_wrist_bgr = cv2.cvtColor(img_wrist_np, cv2.COLOR_RGB2BGR)
+            img_front_bgr = cv2.cvtColor(img_front_np, cv2.COLOR_RGB2BGR)
+            cv2.putText(img_wrist_bgr, 'Wrist Camera', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.putText(img_front_bgr, 'Front Camera', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            combined_image = np.hstack((img_wrist_bgr, img_front_bgr))
+            cv2.imshow("camera", combined_image)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'): # 如果按下 'q' 键
+                print("'q' key pressed, exiting.")
+                break
+            
+            # 检查窗口是否被手动关闭
+            if cv2.getWindowProperty("camera", cv2.WND_PROP_VISIBLE) < 1:
+                print("Window closed, exiting.")
+                break
 
     elif args.no_action or args.init_assembled:
         # Execute 0 actions.
