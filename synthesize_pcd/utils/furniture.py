@@ -106,7 +106,7 @@ def draw_point_cloud(pcd_tensor, window_name="Point Cloud"):
     """
     print("\n正在准备可视化...")
     # 1. 将数据从 GPU 移至 CPU，并转换为 NumPy 数组
-    points_np = pcd_tensor.cpu().numpy()
+    points_np = pcd_tensor.squeeze(0).cpu().numpy()
     
     # 2. 创建 Open3D 的 PointCloud 对象
     pcd_o3d = o3d.geometry.PointCloud()
