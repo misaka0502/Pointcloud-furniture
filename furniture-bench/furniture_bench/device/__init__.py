@@ -4,6 +4,11 @@ def make_device(device_name):
 
         device = KeyboardInterface()
 
+    elif device_name == "omega7":
+        from furniture_bench.device.omega7_interface import Omega7Interface
+
+        device = Omega7Interface()
+
     elif device_name == "oculus":
         from furniture_bench.device.oculus_interface import OculusInterface
 

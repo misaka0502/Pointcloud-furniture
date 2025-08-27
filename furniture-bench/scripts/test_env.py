@@ -33,7 +33,7 @@ def main():
     parser.add_argument(
         "--input-device",
         help="Device to control the robot.",
-        choices=["keyboard", "oculus", "keyboard-oculus"],
+        choices=["keyboard", "oculus", "keyboard-oculus", "omega7"],
     )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument(
@@ -129,6 +129,12 @@ def main():
         furniture = Furniture(ASEET_PATH, device='cuda:0', downsample_voxel_size=0.001)
         visualizer = PointCloudVisualizer()
         part_pose = {}
+    
+    # create device interface
+    if args.input_device is not None:
+        # Teleoperation.
+        device_interface = furniture_bench.device.make_device(args.input_device)
+
     # Initialize FurnitureSim.
     ob = env.reset()
     done = False
@@ -144,10 +150,9 @@ def main():
 
     # Rollout one episode with a selected policy:
     if args.input_device is not None:
-        # Teleoperation.
-        device_interface = furniture_bench.device.make_device(args.input_device)
-
         while not done:
+            if args.input_device == "omega7":
+                device_interface.update()
             action, _ = device_interface.get_action()
             action = action_tensor(action)
             ob, rew, done, _ = env.step(action)
