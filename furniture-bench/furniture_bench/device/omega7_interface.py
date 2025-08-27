@@ -21,7 +21,7 @@ class ControlState(Enum):
 FORCE_TAKEOVER_THRESHOLD = 3.0 # 1.0 牛顿的力
 
 class Omega7Interface(DeviceInterface):
-    def __init__(self, pos_sensitivity: float=8.0, rot_sensitivity: float=1.0,):
+    def __init__(self, pos_sensitivity: float=15.0, rot_sensitivity: float=10.0,):
         """
         Initializes the Omega.7 device.
 
@@ -166,12 +166,13 @@ class Omega7Interface(DeviceInterface):
                 # dhd.expert.setTimeGuard(-1) # for debug
 
                 dhd.getPosition(self.pos) # get position
-                dhd.getOrientationDeg(self.euler)
+                dhd.getOrientationRad(self.euler)
                 dhd.getGripperAngleDeg(self.gripper_angle_c_double)
                 # self.euler = R.from_matrix(np.array(self.matrix)).as_euler('xyz')
                 # self.euler[0]=(self.euler[0]+2.16+3.14-1.8)*240/320#原来是270
                 # self.euler[1]=-(self.euler[1]+0.145)/140*120#原来是180
                 # self.euler[2]=(self.euler[2]-1.5)*1.95
+                self.euler *= np.array([1., -1., -1.])
                 self.matrix = T.euler2mat(self.euler)
                 self.gripper_angle = self.gripper_angle_c_double.value
 
@@ -193,11 +194,12 @@ class Omega7Interface(DeviceInterface):
 
         # get current state from the device
         dhd.getPosition(self.pos)
-        dhd.getOrientationDeg(self.euler)
+        dhd.getOrientationRad(self.euler)
         dhd.getGripperAngleDeg(self.gripper_angle_c_double)
         # self.euler[0]=(self.euler[0]+2.16+3.14-1.8)*240/320#原来是270
         # self.euler[1]=-(self.euler[1]+0.145)/140*120#原来是180
         # self.euler[2]=(self.euler[2]-1.5)*1.95
+        self.euler *= np.array([1., -1., -1.])
         self.matrix = T.euler2mat(self.euler)
         self.gripper_angle = self.gripper_angle_c_double.value
 
