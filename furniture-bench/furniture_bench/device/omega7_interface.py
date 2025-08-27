@@ -41,9 +41,9 @@ class Omega7Interface(DeviceInterface):
         """Resets the internal state of the interface."""
         # # init proprioception
         self.pos = np.zeros(3)
-        self.euler = np.zeros(3)
+        self.euler = np.array([0, 0, 0.9]) # in radian
         self.matrix = np.zeros((3, 3))
-        self.gripper_angle = 29.0 # unit: degree
+        self.gripper_angle = 0.0
         self.gripper_angle_c_double = c_double(self.gripper_angle)
         self.grasp = np.array([-1]) # -1 for open, 1 for close
         self.state = ControlState.STARTUP
