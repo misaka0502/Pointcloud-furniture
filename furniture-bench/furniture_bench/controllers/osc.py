@@ -167,6 +167,7 @@ def osc_factory(real_robot=True, *args, **kwargs):
             return {"joint_torques": torques}
 
         def set_goal(self, goal_pos, goal_ori):
+            # print("\ngoal_pos: ", goal_pos.detach(), "\nself.goal_pos: ", self.goal_pos)
             if (
                 not torch.isclose(goal_pos, self.goal_pos).all()
                 or not torch.isclose(goal_ori, self.goal_ori).all()

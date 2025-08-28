@@ -123,7 +123,7 @@ def main():
         compute_device_id=args.compute_device_id,
         graphics_device_id=args.graphics_device_id,
         action_type='pos',
-        ctrl_mode='osc'
+        ctrl_mode='diffik'
     )
 
     if args.display_pcd:
@@ -158,6 +158,7 @@ def main():
             action, _ = device_interface.get_action()
             action = action_tensor(action)
             ob, rew, done, _ = env.step(action)
+            ee_pos, ee_quat = env.get_ee_pose()
             img_wrist_np = ob['color_image1'].squeeze(0).cpu().numpy().astype(np.uint8)
             img_front_np = ob['color_image2'].squeeze(0).cpu().numpy().astype(np.uint8)
             img_wrist_bgr = cv2.cvtColor(img_wrist_np, cv2.COLOR_RGB2BGR)
@@ -166,25 +167,25 @@ def main():
             cv2.putText(img_front_bgr, 'Front Camera', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             combined_image = np.hstack((img_wrist_bgr, img_front_bgr))
             cv2.imshow("camera", combined_image)
-            if args.display_pcd:
-                part_pose['square_table_top'] = ob['parts_poses'][:, :7]
-                part_pose['square_table_leg1'] = ob['parts_poses'][:, 7:14]
-                part_pose['square_table_leg2'] = ob['parts_poses'][:, 14:21]
-                part_pose['square_table_leg3'] = ob['parts_poses'][:, 21:28]
-                part_pose['square_table_leg4'] = ob['parts_poses'][:, 28:35]
-                furniture.get_pcd_from_offline_data(part_pose)
-                # pcds_sampled = sample_points(torch.cat(list(furniture.parts_pcds_world.values())), sample_num=4096)
-                first_env_pcds_parts = {
-                    part_name: batched_pcd[0].unsqueeze(0)  # 使用索引 [0] 来选择第一个环境
-                    for part_name, batched_pcd in furniture.parts_pcds_world.items()
-                }
-                pcd_to_sample_single_env = torch.cat(list(first_env_pcds_parts.values()), dim=0)
-                pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
-                pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
-                if visualizer.update_point_cloud(pcds_sampled): # 非阻塞式，循环更新点云
-                    time.sleep(0.01)
-                else: 
-                    break
+            # if args.display_pcd:
+            #     part_pose['square_table_top'] = ob['parts_poses'][:, :7]
+            #     part_pose['square_table_leg1'] = ob['parts_poses'][:, 7:14]
+            #     part_pose['square_table_leg2'] = ob['parts_poses'][:, 14:21]
+            #     part_pose['square_table_leg3'] = ob['parts_poses'][:, 21:28]
+            #     part_pose['square_table_leg4'] = ob['parts_poses'][:, 28:35]
+            #     furniture.get_pcd_from_offline_data(part_pose)
+            #     # pcds_sampled = sample_points(torch.cat(list(furniture.parts_pcds_world.values())), sample_num=4096)
+            #     first_env_pcds_parts = {
+            #         part_name: batched_pcd[0].unsqueeze(0)  # 使用索引 [0] 来选择第一个环境
+            #         for part_name, batched_pcd in furniture.parts_pcds_world.items()
+            #     }
+            #     pcd_to_sample_single_env = torch.cat(list(first_env_pcds_parts.values()), dim=0)
+            #     pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
+            #     pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
+            #     if visualizer.update_point_cloud(pcds_sampled): # 非阻塞式，循环更新点云
+            #         time.sleep(0.01)
+            #     else: 
+            #         break
             
             key = cv2.waitKey(1) & 0xFF
             if key == 27: # 如果按下 'esc' 键
@@ -193,9 +194,17 @@ def main():
 
             if key == ord('r'):  # 如果按下 'r' 键
                 print("'r' key pressed, resetting environment.")
-                ob = env.reset()
                 if args.input_device is not None and args.input_device == "omega7":
                     device_interface.reset()
+                ob = env.reset()
+                if env.ctrl_mode == "osc":
+                    # 如果控制器是osc，需要发送一个和初始位置有偏差的动作，机械臂才能迅速回到初始位置,否则会“弹射”到reset前的状态缓慢回到初始位置（osc控制器的实现细节导致的，需要进一步debug）
+                    # 使用dikkik控制器能够避免这个问题
+                    action = action_tensor([env.init_ee_pos[0, 0], env.init_ee_pos[0, 1], env.init_ee_pos[0, 2], env.init_ee_quat[0, 0], env.init_ee_quat[0, 1], env.init_ee_quat[0, 2], env.init_ee_quat[0, 3], -1])
+                    action_ = action * 1.05
+                    ob, rew, done, _ = env.step(action_)
+                    ob, rew, done, _ = env.step(action)
+                done = False
             
             # 检查窗口是否被手动关闭
             if cv2.getWindowProperty("camera", cv2.WND_PROP_VISIBLE) < 1:
@@ -220,6 +229,22 @@ def main():
                 ob, rew, done, _ = env.step(ac)
             else:
                 raise NotImplementedError
+
+            img_wrist_np = ob['color_image1'].squeeze(0).cpu().numpy().astype(np.uint8)
+            img_front_np = ob['color_image2'].squeeze(0).cpu().numpy().astype(np.uint8)
+            img_wrist_bgr = cv2.cvtColor(img_wrist_np, cv2.COLOR_RGB2BGR)
+            img_front_bgr = cv2.cvtColor(img_front_np, cv2.COLOR_RGB2BGR)
+            cv2.putText(img_wrist_bgr, 'Wrist Camera', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            cv2.putText(img_front_bgr, 'Front Camera', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            combined_image = np.hstack((img_wrist_bgr, img_front_bgr))
+            cv2.imshow("camera", combined_image)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('r'):  # 如果按下 'r' 键
+                print("'r' key pressed, resetting environment.")
+                ob = env.reset()
+                done = False
+                env.step()
+
     elif args.random_action:
         # Execute randomly sampled actions.
         import tqdm

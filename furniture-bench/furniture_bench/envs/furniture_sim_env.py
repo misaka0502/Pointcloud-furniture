@@ -1308,6 +1308,12 @@ class FurnitureSimEnv(gym.Env):
             self.reset_env(i)
 
             if self.ctrl_mode == "osc":
+                # if self.ctrl_started: # 确保控制器已经被初始化
+                    # 获取刚刚被重置到的初始位姿
+                    # init_pos, init_quat = self.get_ee_pose()
+                    # self.osc_ctrls[i].reset()
+                    # 手动将控制器的目标重置为新的初始位姿
+                    # self.osc_ctrls[i].set_goal(self.init_ee_pos[i], self.init_ee_quat[i])
                 # apply zero torque across the board and refresh in between each env reset (not needed if using ._reset_*_all())
                 torque_action = torch.zeros_like(self.dof_pos)
                 self.isaac_gym.set_dof_actuation_force_tensor(

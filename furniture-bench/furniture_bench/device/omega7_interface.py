@@ -38,7 +38,7 @@ class Omega7Interface(DeviceInterface):
         self.enum = CollectEnum.DONE_FALSE
         self.state = ControlState.STARTUP # initial state
         self.pos = np.zeros(3)
-        self.euler = np.array([0.0, 0.0, 0.83]) # in radian
+        self.euler = np.array([0.0, 0.0, 52]) # in radian
         self.matrix = np.zeros((3, 3))
         self.gripper_angle = 0.0
         self.gripper_angle_c_double = c_double(self.gripper_angle)
@@ -62,6 +62,10 @@ class Omega7Interface(DeviceInterface):
     def reset(self):
         """Resets the internal state of the interface."""
         # # init proprioception
+        if self.state == ControlState.DHD_MANUAL_CONTROL:
+            if(dhd.close() < 0):
+                print("Failed to close the device")
+            dhd.os_independent.sleep(2)
         self.pos = np.zeros(3)
         self.euler = np.array([0.0, 0.0, 50.0]) * np.pi / 180 # in radian
         self.matrix = np.zeros((3, 3))
@@ -129,7 +133,6 @@ class Omega7Interface(DeviceInterface):
                     print("Failed to emulate button: ")
 
                 # dhd.expert.setTimeGuard(-1) # for debug
-
                 dhd.getPosition(self.pos) # get position
                 dhd.getOrientationRad(self.euler)
                 dhd.getGripperAngleDeg(self.gripper_angle_c_double)
@@ -144,9 +147,10 @@ class Omega7Interface(DeviceInterface):
                 if self.control_mode == 'pos':
                     self.clutch_device_pos = self.pos.copy()
                     self.clutch_device_rot = self.matrix.copy()
+                    print("self.clutch_device_pos: ", self.clutch_device_pos)
             else:
-                # print(f"\rHolding... Applied Force: {force_magnitude:.2f} N", end="")
-                print(f"\rHolding... Squeeze the jaws to activate", end="")
+                print(f"\rHolding... Applied Force: {force_magnitude:.2f} N", end="")
+                # print(f"\rHolding... Squeeze the jaws to activate", end="")
                 drd.hold()
 
     def get_action(self, use_quat=True):
@@ -198,8 +202,6 @@ class Omega7Interface(DeviceInterface):
                 current_device_rot = T.euler2mat(self.euler)
                 relative_pos = current_device_pos - self.clutch_device_pos
                 relative_rot = np.linalg.inv(self.clutch_device_rot) @ current_device_rot
-                print("relavate rot: ", relative_rot)
-                # relative_rot = self.clutch_device_rot.inv() * current_device_rot
                 
                 robot_pos_offset = np.array([relative_pos[0], relative_pos[1], relative_pos[2]]) * self.pos_sensitivity
                 target_pos = self.robot_workspace_center + robot_pos_offset
