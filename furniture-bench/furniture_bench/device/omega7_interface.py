@@ -21,7 +21,8 @@ class ControlState(Enum):
 FORCE_TAKEOVER_THRESHOLD = 3.0 # 1.0 牛顿的力
 
 class Omega7Interface(DeviceInterface):
-    def __init__(self, control_mode='delta', pos_sensitivity: float=15.0, rot_sensitivity: float=10.0,):
+    def __init__(self, control_mode='delta', robot_workspace_center: np.array=np.array([0.5673, 0.0554, 0.1239]), 
+                 robot_init_quat: np.array=np.array([0.8933, 0.4494, -0.0080, 0.0027]), pos_sensitivity: float=5.0, rot_sensitivity: float=10.0,):
         """
         Initializes the Omega.7 device.
 
@@ -36,14 +37,33 @@ class Omega7Interface(DeviceInterface):
         self.rot_sensitivity = rot_sensitivity
         self.enum = CollectEnum.DONE_FALSE
         self.state = ControlState.STARTUP # initial state
-        self.init_state = np.array([0., 0., 0., 0., 0., 0.9, ])
+        self.pos = np.zeros(3)
+        self.euler = np.array([0.0, 0.0, 0.83]) # in radian
+        self.matrix = np.zeros((3, 3))
+        self.gripper_angle = 0.0
+        self.gripper_angle_c_double = c_double(self.gripper_angle)
+        self.grasp = np.array([-1]) # -1 for open, 1 for close
+        self.last_pos = np.zeros(3)
+        self.last_euler = np.zeros(3)
+
+        # --- Positional control specific variables ---
+        self.robot_workspace_center = robot_workspace_center
+        self.robot_init_quat = robot_init_quat
+        self.robot_inti_rot = T.quat2mat(self.robot_init_quat)
+        self.is_clutched = False
+        self.robot_target_pos = np.copy(self.robot_workspace_center)
+        self.robot_target_rot = np.identity(3)
+        self.clutch_device_pos = np.zeros(3)
+        self.clutch_device_rot = np.identity(3)
+        self.coord_swap_rot = R.from_euler('zy', [-90, -90], degrees=True).as_matrix()
+
         self.reset()
 
     def reset(self):
         """Resets the internal state of the interface."""
         # # init proprioception
         self.pos = np.zeros(3)
-        self.euler = np.array([0.0, 0.0, 0.83]) # in radian
+        self.euler = np.array([0.0, 0.0, 50.0]) * np.pi / 180 # in radian
         self.matrix = np.zeros((3, 3))
         self.gripper_angle = 0.0
         self.gripper_angle_c_double = c_double(self.gripper_angle)
@@ -73,6 +93,9 @@ class Omega7Interface(DeviceInterface):
             if drd.moveToRot(self.euler, block=True) < 0:
                 print("Failed to rotate to target rotation matrix")
                 dhd.os_independent.sleep(2)
+            if drd.moveToGrip(2.0, block=True) < 0:
+                print("Failed to move to target gripper distance")
+                dhd.os_independent.sleep(2)
         
         elif self.state == ControlState.DRD_HOMING:
             force = np.zeros(3)
@@ -84,6 +107,7 @@ class Omega7Interface(DeviceInterface):
             if not drd.isMoving() and (force_magnitude > FORCE_TAKEOVER_THRESHOLD):
                 print("State: DRD_HOMING -> DHD_MANUAL_CONTROL")
                 self.state = ControlState.DHD_MANUAL_CONTROL
+                self.is_clutched = True
                 # 退出drd模式
                 if drd.stop(True) < 0:
                     print("Failed to stop drd")
@@ -109,10 +133,6 @@ class Omega7Interface(DeviceInterface):
                 dhd.getPosition(self.pos) # get position
                 dhd.getOrientationRad(self.euler)
                 dhd.getGripperAngleDeg(self.gripper_angle_c_double)
-                # self.euler = R.from_matrix(np.array(self.matrix)).as_euler('xyz')
-                # self.euler[0]=(self.euler[0]+2.16+3.14-1.8)*240/320#原来是270
-                # self.euler[1]=-(self.euler[1]+0.145)/140*120#原来是180
-                # self.euler[2]=(self.euler[2]-1.5)*1.95
                 self.euler *= np.array([1., -1., -1.])
                 self.matrix = T.euler2mat(self.euler)
                 self.gripper_angle = self.gripper_angle_c_double.value
@@ -120,7 +140,14 @@ class Omega7Interface(DeviceInterface):
 
                 self.last_pos = self.pos.copy()
                 self.last_euler = self.euler.copy()
-            drd.hold()
+                
+                if self.control_mode == 'pos':
+                    self.clutch_device_pos = self.pos.copy()
+                    self.clutch_device_rot = self.matrix.copy()
+            else:
+                # print(f"\rHolding... Applied Force: {force_magnitude:.2f} N", end="")
+                print(f"\rHolding... Squeeze the jaws to activate", end="")
+                drd.hold()
 
     def get_action(self, use_quat=True):
         """
@@ -135,7 +162,7 @@ class Omega7Interface(DeviceInterface):
             if self.control_mode == 'delta':
                 return np.array([0, 0, 0, 0, 0, 0, 1, -1]) if use_quat else np.array([0, 0, 0, 0, 0, 0, -1]), self.enum
             elif self.control_mode == 'pos':
-                pass
+                return np.concatenate([self.robot_workspace_center, self.robot_init_quat, np.array([-1])]) if use_quat else np.concatenate([self.robot_workspace_center, R.from_quat(self.robot_init_quat).as_euler('xyz'), np.array([-1])]), self.enum
             else:
                 raise NotImplementedError
 
@@ -150,6 +177,8 @@ class Omega7Interface(DeviceInterface):
             deuler = (self.euler - self.last_euler) * self.rot_sensitivity
             dquat = T.mat2quat(T.euler2mat(deuler))
 
+            self.get_gripper_action()
+
             if use_quat:
                 if dquat[0] < 0:
                     dquat = -dquat
@@ -160,7 +189,31 @@ class Omega7Interface(DeviceInterface):
             self.last_pos = self.pos.copy()
             self.last_euler = self.euler.copy()
         elif self.control_mode == 'pos':
-            pass
+
+            if self.is_clutched:
+                dhd.getPosition(self.pos)
+                dhd.getOrientationRad(self.euler)
+                current_device_pos = self.pos
+                self.euler *= np.array([1., -1., -1.])
+                current_device_rot = T.euler2mat(self.euler)
+                relative_pos = current_device_pos - self.clutch_device_pos
+                relative_rot = np.linalg.inv(self.clutch_device_rot) @ current_device_rot
+                print("relavate rot: ", relative_rot)
+                # relative_rot = self.clutch_device_rot.inv() * current_device_rot
+                
+                robot_pos_offset = np.array([relative_pos[0], relative_pos[1], relative_pos[2]]) * self.pos_sensitivity
+                target_pos = self.robot_workspace_center + robot_pos_offset
+                
+                target_rot = self.robot_inti_rot @ relative_rot
+            
+            self.get_gripper_action()
+
+            if use_quat:
+                target_quat = T.mat2quat(target_rot)
+                action = np.concatenate([target_pos, target_quat, self.grasp])
+            else:
+                target_euler = T.mat2euler(target_rot)
+                action = np.concatenate([target_pos, target_euler, self.grasp])
         else:
             raise NotImplementedError
 

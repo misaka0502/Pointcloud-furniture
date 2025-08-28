@@ -11,8 +11,8 @@
             "program": "${workspaceFolder}/furniture-bench/scripts/test_env.py",
             "console": "integratedTerminal",
             "args": [
-                "--input-device", "keyboard",
-                "--display-pcd"
+                "--input-device", "omega7",
+                // "--display-pcd"
             ]
         },
         {
@@ -22,8 +22,8 @@
             "module": "furniture-bench.scripts.test_env",
             "console": "integratedTerminal",
             "args": [
-                "--input-device", "keyboard",
-                "--display-pcd"
+                "--input-device", "omega7",
+                // "--display-pcd"
             ]
         }
     ]

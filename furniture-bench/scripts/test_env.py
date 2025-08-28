@@ -122,7 +122,7 @@ def main():
         act_rot_repr=args.act_rot_repr,
         compute_device_id=args.compute_device_id,
         graphics_device_id=args.graphics_device_id,
-        action_type='delta',
+        action_type='pos',
         ctrl_mode='osc'
     )
 
@@ -134,7 +134,8 @@ def main():
     # create device interface
     if args.input_device is not None:
         # Teleoperation.
-        device_interface = furniture_bench.device.make_device(args.input_device)
+        device_interface = furniture_bench.device.make_device(args.input_device, control_mode=env.action_type, 
+                                                              robot_workspace_center=env.init_ee_pos[0].cpu().numpy(), robot_init_quat=env.init_ee_quat[0].cpu().numpy())
 
     # Initialize FurnitureSim.
     ob = env.reset()
@@ -189,6 +190,12 @@ def main():
             if key == 27: # 如果按下 'esc' 键
                 print("'esc' key pressed, exiting.")
                 break
+
+            if key == ord('r'):  # 如果按下 'r' 键
+                print("'r' key pressed, resetting environment.")
+                ob = env.reset()
+                if args.input_device is not None and args.input_device == "omega7":
+                    device_interface.reset()
             
             # 检查窗口是否被手动关闭
             if cv2.getWindowProperty("camera", cv2.WND_PROP_VISIBLE) < 1:
@@ -198,11 +205,21 @@ def main():
     elif args.no_action or args.init_assembled:
         # Execute 0 actions.
         while True:
-            if args.act_rot_repr == "quat":
-                ac = action_tensor([0, 0, 0, 0, 0, 0, 1, -1])
+            if env.action_type == 'delta':
+                if args.act_rot_repr == "quat":
+                    ac = action_tensor([0, 0, 0, 0, 0, 0, 1, -1])
+                else:
+                    ac = action_tensor([0, 0, 0, 0, 0, 0, -1])
+                ob, rew, done, _ = env.step(ac)
+            elif env.action_type == 'pos':
+                # ee_pos, ee_quat = env.get_ee_pose()
+                if args.act_rot_repr == "quat":
+                    ac = action_tensor([env.init_ee_pos[0, 0], env.init_ee_pos[0, 1], env.init_ee_pos[0, 2], env.init_ee_quat[0, 0], env.init_ee_quat[0, 1], env.init_ee_quat[0, 2], env.init_ee_quat[0, 3], -1])
+                else:
+                    raise NotImplementedError
+                ob, rew, done, _ = env.step(ac)
             else:
-                ac = action_tensor([0, 0, 0, 0, 0, 0, -1])
-            ob, rew, done, _ = env.step(ac)
+                raise NotImplementedError
     elif args.random_action:
         # Execute randomly sampled actions.
         import tqdm

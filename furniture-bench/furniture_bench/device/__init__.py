@@ -1,4 +1,4 @@
-def make_device(device_name):
+def make_device(device_name, **kwargs):
     if device_name == "keyboard":
         from furniture_bench.device.keyboard_interface import KeyboardInterface
 
@@ -7,7 +7,7 @@ def make_device(device_name):
     elif device_name == "omega7":
         from furniture_bench.device.omega7_interface import Omega7Interface
 
-        device = Omega7Interface()
+        device = Omega7Interface(**kwargs)
 
     elif device_name == "oculus":
         from furniture_bench.device.oculus_interface import OculusInterface
