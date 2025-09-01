@@ -23,7 +23,7 @@ FORCE_TAKEOVER_THRESHOLD = 3.0 # 1.0 牛顿的力
 class Omega7Interface(DeviceInterface):
     def __init__(self, control_mode='delta', robot_workspace_center: np.array=np.array([0.5673, 0.0554, 0.1239]), 
                  robot_init_quat: np.array=np.array([0.8933, 0.4494, -0.0080, 0.0027]), pos_sensitivity: float=5.0,
-                 rot_sensitivity: float=10.0, hybrid_control=True, workspace_radius: float=0.2, dead_zone_ratio: float=0.9):
+                 rot_sensitivity: float=10.0, hybrid_control=False, workspace_radius: float=0.2, dead_zone_ratio: float=0.9):
         """
         Initializes the Omega.7 device.
 
@@ -33,7 +33,7 @@ class Omega7Interface(DeviceInterface):
             robot_init_quat (np.array): The initial quaternion of the robot (default: [0.8933, 0.4494, -0.0080, 0.0027]).
             pos_sensitivity (float): The position sensitivity of the device (default: 5.0).
             rot_sensitivity (float): The rotation sensitivity of the device (default: 10.0).
-            hybrid_control (bool): Whether to use hybrid control (default: True).
+            hybrid_control (bool): Whether to use hybrid control (default: False).
             workspace_radius (float): The radius of the robot's workspace, unit: m (default: 0.2).
             dead_zone_ratio (float): The dead zone ratio (default: 0.9).
         """
@@ -65,6 +65,7 @@ class Omega7Interface(DeviceInterface):
         self.coord_swap_rot = R.from_euler('zy', [-90, -90], degrees=True).as_matrix()
 
         # --- hybrid control mode ---
+        # 感觉没啥必要，暂时不加了
         self.hybrid_control = hybrid_control
         if self.hybrid_control:
             # 边界半径 (米)

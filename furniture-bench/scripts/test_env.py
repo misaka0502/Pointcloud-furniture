@@ -19,6 +19,17 @@ from scripts.observation import FULL_OBS
 
 ASEET_PATH = 'synthesize_pcd/assets/furniture_bench/mesh/square_table'
 
+def get_intrinsics_from_projection_matrix(proj_matrix, width, height):
+    """
+    从Isaac Gym的投影矩阵中提取相机内参.
+    """
+    fx = proj_matrix[0, 0] * width / 2.0
+    fy = proj_matrix[1, 1] * height / 2.0
+    cx = (1 - proj_matrix[0, 2]) * width / 2.0
+    cy = (1 + proj_matrix[1, 2]) * height / 2.0
+    
+    return fx, fy, cx, cy
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--furniture", default="square_table")
@@ -130,6 +141,25 @@ def main():
         furniture = Furniture(ASEET_PATH, device='cuda:0', downsample_voxel_size=0.001)
         visualizer = PointCloudVisualizer()
         part_pose = {}
+        cam_pos = np.array([0.90, -0.00, 0.65])
+        cam_target = np.array([-1, -0.00, 0.3])
+        z_camera = (cam_target - cam_pos) / np.linalg.norm(cam_target - cam_pos)
+        up_axis = np.array([0, 0, 1])  # Assuming Z is the up axis
+        x_camera = -np.cross(up_axis, z_camera)
+        x_camera /= np.linalg.norm(x_camera)
+        y_camera = np.cross(z_camera, x_camera)
+        R_camera_sim = np.vstack([x_camera, y_camera, z_camera]).T
+        T_camera_to_world = np.eye(4)
+        T_camera_to_world[:3, :3] = R_camera_sim
+        T_world_to_camera = np.linalg.inv(T_camera_to_world)
+        project_matrix, _ = env.get_front_projection_view_matrix()
+        fx, fy, cx, cy = get_intrinsics_from_projection_matrix(project_matrix, 1280, 720)
+        # 构建内参矩阵 K
+        camera_intrinsic_matrix = np.array([
+            [fx, 0, cx],
+            [0, fy, cy],
+            [0, 0, 1]
+        ])
     
     # create device interface
     if args.input_device is not None:
@@ -167,26 +197,41 @@ def main():
             cv2.putText(img_front_bgr, 'Front Camera', (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             combined_image = np.hstack((img_wrist_bgr, img_front_bgr))
             cv2.imshow("camera", combined_image)
-            # if args.display_pcd:
-            #     part_pose['square_table_top'] = ob['parts_poses'][:, :7]
-            #     part_pose['square_table_leg1'] = ob['parts_poses'][:, 7:14]
-            #     part_pose['square_table_leg2'] = ob['parts_poses'][:, 14:21]
-            #     part_pose['square_table_leg3'] = ob['parts_poses'][:, 21:28]
-            #     part_pose['square_table_leg4'] = ob['parts_poses'][:, 28:35]
-            #     furniture.get_pcd_from_offline_data(part_pose)
-            #     # pcds_sampled = sample_points(torch.cat(list(furniture.parts_pcds_world.values())), sample_num=4096)
-            #     first_env_pcds_parts = {
-            #         part_name: batched_pcd[0].unsqueeze(0)  # 使用索引 [0] 来选择第一个环境
-            #         for part_name, batched_pcd in furniture.parts_pcds_world.items()
-            #     }
-            #     pcd_to_sample_single_env = torch.cat(list(first_env_pcds_parts.values()), dim=0)
-            #     pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
-            #     pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
-            #     if visualizer.update_point_cloud(pcds_sampled): # 非阻塞式，循环更新点云
-            #         time.sleep(0.01)
-            #     else: 
-            #         break
-            
+            if args.display_pcd:
+                part_pose['square_table_top'] = ob['parts_poses'][:, :7]
+                part_pose['square_table_leg1'] = ob['parts_poses'][:, 7:14]
+                part_pose['square_table_leg2'] = ob['parts_poses'][:, 14:21]
+                part_pose['square_table_leg3'] = ob['parts_poses'][:, 21:28]
+                part_pose['square_table_leg4'] = ob['parts_poses'][:, 28:35]
+                furniture.get_pcd_from_offline_data(part_pose)
+                # pcds_sampled = sample_points(torch.cat(list(furniture.parts_pcds_world.values())), sample_num=4096)
+                first_env_pcds_parts = {
+                    part_name: batched_pcd[0].unsqueeze(0)  # 使用索引 [0] 来选择第一个环境
+                    for part_name, batched_pcd in furniture.parts_pcds_world.items()
+                }
+                pcd_to_sample_single_env = torch.cat(list(first_env_pcds_parts.values()), dim=0)
+                pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
+                pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
+                if visualizer.update_point_cloud(pcds_sampled): # 非阻塞式，循环更新点云
+                    time.sleep(0.01)
+                else: 
+                    break
+                # # 裁剪点云
+                # cropped_pcd_tensor = visualizer.crop_pcd_with_camera_view(
+                #     pcd=pcds_sampled,
+                #     camera_T=T_world_to_camera, # 确保这里传入的是世界到相机的变换
+                #     camera_intrinsic_matrix=camera_intrinsic_matrix,
+                #     img_size=(1280, 720),
+                # )
+                # print(f"Original point cloud size: {pcds_sampled.shape[0]}")
+                # print(f"Cropped point cloud size: {cropped_pcd_tensor.shape[0]}")
+
+                # # 可视化裁剪后的点云
+                # if visualizer.update_point_cloud(cropped_pcd_tensor): # 非阻塞式，循环更新点云
+                #     time.sleep(0.01)
+                # else: 
+                #     break
+
             key = cv2.waitKey(1) & 0xFF
             if key == 27: # 如果按下 'esc' 键
                 print("'esc' key pressed, exiting.")

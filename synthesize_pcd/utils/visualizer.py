@@ -44,9 +44,9 @@ class PointCloudVisualizer:
         
         # 优化渲染设置
         opt = self.visualizer.get_render_option()
-        opt.background_color = np.asarray([1.0, 1.0, 1.0]) # 1. 设置纯白背景
-        opt.point_size = 3.5                               # 2. 调整点的大小
-        opt.light_on = False                               # 3. 关闭光照效果，实现简约风格
+        opt.background_color = np.asarray([1.0, 1.0, 1.0]) # 设置纯白背景
+        opt.point_size = 3.5                               # 调整点的大小
+        opt.light_on = False                               # 关闭光照效果，实现简约风格
         
         self.is_initialized = True
         self.keep_running = True
@@ -90,6 +90,66 @@ class PointCloudVisualizer:
         self.visualizer.update_renderer()
 
         return self.keep_running
+    
+    def crop_pcd_with_camera_view(self, pcd: torch.Tensor, camera_T: np.ndarray, camera_intrinsic_matrix: np.ndarray, 
+                                  img_size: tuple, depth_min: float=0.05, depth_max: float=2.0):
+        """
+        根据腕部相机视角裁剪点云，实现腕部相机点云合成
+        :param pcd: PyTorch 张量，世界坐标系下的完整点云 (N, 3)。
+        :param camera_T: 世界坐标系到相机坐标系的变换 T_world_to_camera (4x4 NumPy 数组)。
+        :param camera_intrinsic_matrix: 相机内参矩阵 K (3x3 NumPy 数组)。
+        :param img_size: 相机图像尺寸 (W, H)。
+        :param depth_min: 相机可检测的最小深度 (米)。
+        :param depth_max: 相机可检测的最大深度 (米)。
+        :return: PyTorch 张量，裁剪后的点云 (M, 3)。
+        """
+        pcd_np = pcd.squeeze().cpu().numpy()
+        img_width, img_height = img_size[0], img_size[1]
+        points_homo = np.hstack((pcd_np, np.ones((pcd_np.shape[0], 1)))) # 添加 W 
+        points_camera_coord = (camera_T @ points_homo.T).T[:, :3] # 将点从世界坐标系转换到相机坐标系
+        # 深度裁剪（Z 轴裁剪）。注意方向，一般相机Z轴指向前方
+        depth_mask = (points_camera_coord[:, 2] > depth_min) & \
+                     (points_camera_coord[:, 2] < depth_max)
+        points_camera_coord_depth_filtered = points_camera_coord[depth_mask]
+        points_world_coord_depth_filtered = pcd_np[depth_mask] # 
+        if points_camera_coord_depth_filtered.shape[0] == 0:
+            print("Warning: No points remain after depth filtering.")
+            return torch.empty((0, 3), dtype=pcd.dtype)
+        
+        # 视锥体裁剪 (Frustum Culling)
+        # 将相机坐标系中的点投影到图像平面
+        # 齐次坐标投影
+        proj_points_homo = (camera_intrinsic_matrix @ points_camera_coord_depth_filtered.T).T
+        
+        # 归一化齐次坐标，得到像素坐标 (u, v)
+        # 避免除以零
+        z_coords_proj = proj_points_homo[:, 2]
+        # 使用一个小的 epsilon 防止除以零，并处理 z_coords_proj 为负的情况 (通常不应该发生，除非点在相机后面)
+        epsilon = 1e-6 
+        valid_z_mask = z_coords_proj > epsilon
+        
+        # 对于 z <= epsilon 的点，它们在相机后面或在近裁剪面附近，不进行投影
+        proj_points_homo = proj_points_homo[valid_z_mask]
+        points_world_coord_frustum_filtered = points_world_coord_depth_filtered[valid_z_mask]
+
+        if proj_points_homo.shape[0] == 0:
+            print("Warning: No points remain after valid Z projection filtering.")
+            return torch.empty((0, 3), dtype=pcd.dtype)
+
+        pixel_u = proj_points_homo[:, 0] / proj_points_homo[:, 2]
+        pixel_v = proj_points_homo[:, 1] / proj_points_homo[:, 2]
+        
+        # 检查像素坐标是否在图像范围内
+        frustum_mask = (pixel_u >= 0) & (pixel_u < img_width) & \
+                       (pixel_v >= 0) & (pixel_v < img_height)
+        
+        cropped_points_world_coord = points_world_coord_frustum_filtered[frustum_mask]
+
+        # 将结果转换回 PyTorch 张量
+        return torch.tensor(cropped_points_world_coord, dtype=pcd.dtype)
+
+
+
     def close(self):
         """
         关闭可视化窗口。
