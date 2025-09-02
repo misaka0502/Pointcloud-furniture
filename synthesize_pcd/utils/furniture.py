@@ -1,4 +1,5 @@
-import utils.fb_control_utils as C
+import furniture_bench.controllers.control_utils as C
+import utils.fb_control_utils as CC
 import torch
 import os
 import glob
@@ -74,7 +75,7 @@ class Furniture:
             part_pos, part_quat = part_poses[:, :3], part_poses[:, 3:]
             # quaternion_to_matrix assumes real part first
             part_quat = part_quat[..., [3, 0, 1, 2]]
-            part_tf = C.batched_pose2mat(
+            part_tf = CC.batched_pose2mat(
                 part_pos, part_quat, device=self.device
             )  # (num_envs, 4, 4)
             part_pcd_transformed = part_tf @ local_pcd.T  # (num_envs, 4, n_points)
@@ -191,3 +192,103 @@ def record_point_cloud_animation_imageio(pcd_sequence, output_path="output_anima
         os.remove(frame_file)
     os.rmdir(temp_frame_dir)
     print("清理完成。")
+
+def get_wrist_camera_pose(
+    ee_pos: torch.Tensor, 
+    ee_quat: torch.Tensor,
+    camera_local_mat: torch.Tensor
+) -> torch.Tensor:
+    """
+    根据末端执行器(EE)的位姿，计算附加在其上的腕部相机的世界位姿。
+
+    此函数假设相机相对于EE的局部变换是固定的，
+    其值为 p=(-0.04, 0, -0.05) 和 r=绕Y轴旋转-70度。
+
+    Args:
+        ee_pos (torch.Tensor): 末端执行器在世界坐标系中的位置，形状为 (3,)。
+        ee_quat (torch.Tensor): 末端执行器在世界坐标系中的旋转四元数，
+                                形状为 (4,)，顺序为 (x, y, z, w)。
+
+    Returns:
+        torch.Tensor: 腕部相机在世界坐标系下的4x4位姿矩阵。
+    """
+    
+    # 将输入的EE位姿转换为一个 4x4 的世界变换矩阵
+    
+    ee_world_mat = torch.eye(4, device=ee_pos.device, dtype=torch.float32)
+    ee_world_rot_mat = CC.quat2mat(ee_quat.squeeze(0))
+
+    ee_world_mat[:3, :3] = ee_world_rot_mat
+    # 填充平移部分
+    ee_world_mat[:3, 3] = ee_pos
+
+    # 矩阵相乘，得到最终的相机世界位姿
+    # 公式: Camera_World_Pose = EE_World_Pose * Camera_Local_Transform
+    wrist_camera_pose = ee_world_mat @ camera_local_mat
+    
+    return wrist_camera_pose
+
+def get_wrist_camera_pcd(full_pcd_world: torch.Tensor, camera_pose_world: torch.Tensor, camera_intrinsics: dict, z_near: float=0.07, z_far: float=0.5):
+    """
+    根据腕部相机的位姿和视野，从世界点云中获取其视野内的点云。
+
+    Args:
+        world_pcd (torch.Tensor): 世界坐标系下的完整点云，形状为 (num_envs, N, 3)。
+        camera_pose_world (torch.Tensor): 腕部相机在世界坐标系下的位姿，
+                                          表示从相机坐标系到世界坐标系的变换。
+                                          形状为 (num_envs, 4, 4)。
+        intrinsics (dict): 相机内参，包含 'width', 'height', 'fx', 'fy', 'cx', 'cy'。
+        z_near (float): 相机视锥体的近裁剪平面距离。
+        z_far (float): 相机视锥体的远裁剪平面距离。
+
+    Returns:
+        torch.Tensor: 经过腕部相机视野裁剪后，仍在世界坐标系下的点云。
+                      形状为 (num_envs, M, 3)，M 是可见点的数量。
+    """
+    device = full_pcd_world.device
+    
+    # transform world pcd to camera frame
+    # camera_pose_world 是从相机坐标系 -> 世界坐标系的变换
+    world_to_camera_tf = torch.inverse(camera_pose_world)
+    # 将点云转换为齐次坐标 (N, 4)
+    world_pcd_homo = C.xyz_to_homogeneous(full_pcd_world, device)
+    # 应用变换 (4, 4) @ (4, N) -> (4, N)
+    pcd_camera_frame_homo = world_to_camera_tf @ world_pcd_homo.T.squeeze(-1)
+
+    # 转换回非齐次坐标 (N, 3)
+    pcd_camera_frame = pcd_camera_frame_homo.T[:, :3]
+
+    # 视椎体裁剪 Frustum Culling
+    X, Y, Z = pcd_camera_frame[..., 0], pcd_camera_frame[..., 1], pcd_camera_frame[..., 2]
+    # 深度裁剪: 只保留在相机近裁平面和远裁平面之间的点
+    depth_mask = (Z > z_near) & (Z < z_far)
+    # 视野裁剪: 将3D点云投影到2D像素平面
+    u = camera_intrinsics['fx'] * X / Z + camera_intrinsics['cx']
+    v = camera_intrinsics['fy'] * Y / Z + camera_intrinsics['cy']
+    # 只保留投影后再图像范围内的点
+    fov_mask = (u >= 0) & (u < camera_intrinsics['width']) & (v >= 0) & (v < camera_intrinsics['height'])
+    # 合并所有掩码
+    visible_mask = depth_mask & fov_mask
+
+    # 提取所有可见的点
+    visible_pcd_camera_frame = pcd_camera_frame[visible_mask]
+
+    # 将可见点云从相机坐标系转换回世界坐标系
+    # 确保张量是二维的，以便后续处理
+    if visible_pcd_camera_frame.ndim == 1:
+        visible_pcd_camera_frame = visible_pcd_camera_frame.unsqueeze(0)
+
+    # 如果没有可见点，则返回空张量
+    if visible_pcd_camera_frame.shape[0] == 0:
+        return torch.empty((0, 3), device=device, dtype=torch.float32)
+    
+    # 转换回齐次坐标
+    visible_pcd_camera_frame_homo = C.xyz_to_homogeneous(visible_pcd_camera_frame, device)
+
+    # 应用原始的相机位姿矩阵，将其变换回世界坐标系
+    visible_pcd_world_homo = camera_pose_world @ visible_pcd_camera_frame_homo.T
+
+    # 转换回非齐次坐标
+    visible_pcd_world = visible_pcd_world_homo.T[:, :3]
+
+    return visible_pcd_world

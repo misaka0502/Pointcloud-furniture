@@ -1146,7 +1146,16 @@ class FurnitureSimEnv(gym.Env):
         base_pos = self.rb_states[self.base_idxs, :3]
         base_quat = self.rb_states[self.base_idxs, 3:7]  # Align with world coordinate.
         return hand_pos - base_pos, hand_quat
-
+    
+    def get_ee_pose_apriltag(self):
+        """Gets end-effector pose in Apriltag coordinate for getting wrist camera transform."""
+        hand_pos = self.rb_states[self.ee_idxs, :3]
+        hand_quat = self.rb_states[self.ee_idxs, 3:7]
+        hand_pose_mat_world = C.pose2mat(hand_pos.squeeze(0), hand_quat.squeeze(0), self.device)
+        transform_tag_from_sim = self.sim_to_april_mat # 形状: (4, 4)
+        hand_pose_mat_tag = transform_tag_from_sim @ hand_pose_mat_world
+        hand_pos_tag, hand_quat_tag = C.mat2pose(hand_pose_mat_tag)
+        return hand_pos_tag, hand_quat_tag
     def gripper_width(self):
         return self.dof_pos[:, 7:8] + self.dof_pos[:, 8:9]
 

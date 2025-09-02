@@ -11,8 +11,8 @@ import cv2
 import torch
 import numpy as np
 import imageio
-from synthesize_pcd.utils.furniture import Furniture, sample_points, draw_point_cloud, record_point_cloud_animation_imageio
-from synthesize_pcd.utils.visualizer import PointCloudVisualizer
+from synthesize_pcd.utils.furniture import Furniture, sample_points, draw_point_cloud, record_point_cloud_animation_imageio, get_wrist_camera_pcd, get_wrist_camera_pose
+from synthesize_pcd.utils.visualizer import PointCloudVisualizer, MultiPointCloudVisualizer
 import open3d as o3d
 import time
 from scripts.observation import FULL_OBS
@@ -139,27 +139,60 @@ def main():
 
     if args.display_pcd:
         furniture = Furniture(ASEET_PATH, device='cuda:0', downsample_voxel_size=0.001)
-        visualizer = PointCloudVisualizer()
+        # visualizer = PointCloudVisualizer()
+        visualizer = MultiPointCloudVisualizer() # for displaying global pcd and wrist local pcd at the same timw
         part_pose = {}
-        cam_pos = np.array([0.90, -0.00, 0.65])
-        cam_target = np.array([-1, -0.00, 0.3])
-        z_camera = (cam_target - cam_pos) / np.linalg.norm(cam_target - cam_pos)
-        up_axis = np.array([0, 0, 1])  # Assuming Z is the up axis
-        x_camera = -np.cross(up_axis, z_camera)
-        x_camera /= np.linalg.norm(x_camera)
-        y_camera = np.cross(z_camera, x_camera)
-        R_camera_sim = np.vstack([x_camera, y_camera, z_camera]).T
-        T_camera_to_world = np.eye(4)
-        T_camera_to_world[:3, :3] = R_camera_sim
-        T_world_to_camera = np.linalg.inv(T_camera_to_world)
-        project_matrix, _ = env.get_front_projection_view_matrix()
-        fx, fy, cx, cy = get_intrinsics_from_projection_matrix(project_matrix, 1280, 720)
-        # 构建内参矩阵 K
-        camera_intrinsic_matrix = np.array([
-            [fx, 0, cx],
-            [0, fy, cy],
-            [0, 0, 1]
+        # cam_pos = np.array([0.90, -0.00, 0.65])
+        # cam_target = np.array([-1, -0.00, 0.3])
+        # z_camera = (cam_target - cam_pos) / np.linalg.norm(cam_target - cam_pos)
+        # up_axis = np.array([0, 0, 1])  # Assuming Z is the up axis
+        # x_camera = -np.cross(up_axis, z_camera)
+        # x_camera /= np.linalg.norm(x_camera)
+        # y_camera = np.cross(z_camera, x_camera)
+        # R_camera_sim = np.vstack([x_camera, y_camera, z_camera]).T
+        # T_camera_to_world = np.eye(4)
+        # T_camera_to_world[:3, :3] = R_camera_sim
+        # T_world_to_camera = np.linalg.inv(T_camera_to_world)
+        # project_matrix, _ = env.get_front_projection_view_matrix()
+        # fx, fy, cx, cy = get_intrinsics_from_projection_matrix(project_matrix, 1280, 720)
+        # # 构建内参矩阵 K
+        # camera_intrinsic_matrix = np.array([
+        #     [fx, 0, cx],
+        #     [0, fy, cy],
+        #     [0, 0, 1]
+        # ])
+        width = 1280
+        height = 720
+        fov = 69.4
+        fx = width / (2.0 * np.tan(np.deg2rad(fov / 2.0)))
+        fy = fx
+        cx = width / 2.0
+        cy = height / 2.0
+        wrist_cam_intrinsics = {
+            'width': width, 'height': height,
+            'fx': fx, 'fy': fy, # 焦距
+            'cx': cx, 'cy': cy, # 主点 (图像中心)
+        }
+        # 定义本地 gymapi.Transform
+        p = np.array([-0.04, 0, -0.05])
+        # 计算 3x3 旋转矩阵 (绕 Y 轴)
+        rotation_angle_rad = np.radians(-70.0)
+        c = np.cos(rotation_angle_rad)
+        s = np.sin(rotation_angle_rad)
+        # 绕Y轴旋转的标准矩阵形式
+        r = np.array([
+            [c,  0,  s],
+            [0,  1,  0],
+            [-s, 0,  c]
         ])
+        wrist_camera_local_mat = np.eye(4)
+        wrist_camera_local_mat[:3, :3] = r
+        wrist_camera_local_mat[:3, 3] = p
+        # 转换为 PyTorch 张量，并确保设备一致
+        wrist_camera_local_mat = torch.tensor(
+            wrist_camera_local_mat, device=env.device, dtype=torch.float32
+        )
+
     
     # create device interface
     if args.input_device is not None:
@@ -211,26 +244,21 @@ def main():
                 }
                 pcd_to_sample_single_env = torch.cat(list(first_env_pcds_parts.values()), dim=0)
                 pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
-                pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
-                if visualizer.update_point_cloud(pcds_sampled): # 非阻塞式，循环更新点云
-                    time.sleep(0.01)
-                else: 
-                    break
-                # # 裁剪点云
-                # cropped_pcd_tensor = visualizer.crop_pcd_with_camera_view(
-                #     pcd=pcds_sampled,
-                #     camera_T=T_world_to_camera, # 确保这里传入的是世界到相机的变换
-                #     camera_intrinsic_matrix=camera_intrinsic_matrix,
-                #     img_size=(1280, 720),
-                # )
-                # print(f"Original point cloud size: {pcds_sampled.shape[0]}")
-                # print(f"Cropped point cloud size: {cropped_pcd_tensor.shape[0]}")
 
-                # # 可视化裁剪后的点云
-                # if visualizer.update_point_cloud(cropped_pcd_tensor): # 非阻塞式，循环更新点云
+                ee_pos, ee_quat = env.get_ee_pose_apriltag()
+                wrist_camera_pose = get_wrist_camera_pose(ee_pos, ee_quat, wrist_camera_local_mat)
+                wrist_pcd_samples = get_wrist_camera_pcd(pcds_sampled, wrist_camera_pose, wrist_cam_intrinsics)
+                # if visualizer.update_point_cloud(pcds_sampled): # 非阻塞式，循环更新点云
                 #     time.sleep(0.01)
                 # else: 
                 #     break
+                visualizer.update_geometries(
+                    global_pcd_tensor=pcds_sampled,
+                    wrist_pcd_tensor=wrist_pcd_samples,
+                    wrist_camera_pose_mat=wrist_camera_pose
+                )
+                
+                time.sleep(0.01) # 控制帧率
 
             key = cv2.waitKey(1) & 0xFF
             if key == 27: # 如果按下 'esc' 键

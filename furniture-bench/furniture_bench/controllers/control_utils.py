@@ -435,6 +435,14 @@ def quat_wxyz_to_xyzw(quat_wxyz):
     inds = torch.tensor([1, 2, 3, 0], dtype=torch.long, device=quat_wxyz.device)
     return torch.index_select(quat_wxyz, dim=-1, index=inds)
 
+@torch.jit.script
+def xyz_to_homogeneous(xyz: torch.Tensor, device: torch.device) -> torch.Tensor:
+    """
+    xyz: (..., 3)
+    """
+    batch_shape = xyz.shape[:-1]
+    ones = torch.ones(batch_shape + (1,), device=device, dtype=xyz.dtype)
+    return torch.cat([xyz, ones], dim=-1)
 
 @torch.jit.script
 def orientation_error_quat(desired, current):
