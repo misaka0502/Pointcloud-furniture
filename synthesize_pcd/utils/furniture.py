@@ -225,6 +225,32 @@ def get_wrist_camera_pose(
     # 矩阵相乘，得到最终的相机世界位姿
     # 公式: Camera_World_Pose = EE_World_Pose * Camera_Local_Transform
     wrist_camera_pose = ee_world_mat @ camera_local_mat
+
+    # 将相机的位姿绕其本地坐标系Y轴旋转90度修正，虽然不知道为什么，但是得这样做
+    angle_rad = np.radians(90)
+    c = np.cos(angle_rad)
+    s = np.sin(angle_rad)
+    
+    device = wrist_camera_pose.device
+    
+    # 创建一个绕本地Y轴旋转的4x4变换矩阵
+    rotation_y_local = torch.tensor([
+        [c,  0,  s,  0],
+        [0,  1,  0,  0],
+        [-s, 0,  c,  0],
+        [0,  0,  0,  1]
+    ], device=device, dtype=torch.float32)
+    # 创建一个绕本地Z轴旋转的4x4变换矩阵
+    rotation_z_local = torch.tensor([
+        [c, -s,  0,  0],
+        [s,  c,  0,  0],
+        [0,  0,  1,  0],
+        [0,  0,  0,  1]
+    ], device=device, dtype=torch.float32)
+    
+    # 右乘
+    # PyTorch的广播机制会自动处理 (B, 4, 4) @ (4, 4) -> (B, 4, 4)
+    wrist_camera_pose = wrist_camera_pose @ rotation_y_local @ rotation_z_local
     
     return wrist_camera_pose
 
@@ -292,3 +318,75 @@ def get_wrist_camera_pcd(full_pcd_world: torch.Tensor, camera_pose_world: torch.
     visible_pcd_world = visible_pcd_world_homo.T[:, :3]
 
     return visible_pcd_world
+
+def get_wrist_camera_pcd_from_view_matrix(
+    world_pcd: torch.Tensor,             # 形状: (B, N, 3)
+    camera_view_matrix: torch.Tensor,    # 形状: (B, 4, 4) <-- 直接使用视图矩阵
+    intrinsics: dict,
+    z_near: float = 0.07,
+    z_far: float = 0.5,
+) -> torch.Tensor:
+    """
+    根据腕部相机的【视图矩阵】和视野，从世界点云中获取其视野内的点云。
+    
+    Args:
+        world_pcd (torch.Tensor): 世界坐标系下的完整点云。
+        camera_view_matrix (torch.Tensor): 腕部相机在世界坐标系下的【视图矩阵】。
+        intrinsics (dict): 相机内参。
+        z_near (float): 相机视锥体的近裁剪平面距离。
+        z_far (float): 相机视锥体的远裁剪平面距离。
+
+    Returns:
+        torch.Tensor: 裁剪后，仍在【世界坐标系】下的点云。
+    """
+    B, N, _ = world_pcd.shape
+    device = world_pcd.device
+
+    # --- 步骤 1: 将世界点云变换到相机坐标系 ---
+    
+    # 准备齐次坐标的世界点云，形状 (B, N, 4) -> (B, 4, N)
+    ones = torch.ones((B, N, 1), device=device, dtype=torch.float32)
+    world_pcd_homo = torch.cat([world_pcd, ones], dim=-1).transpose(1, 2)
+
+    # 【核心改动】直接使用视图矩阵进行变换，无需再求逆
+    # (B, 4, 4) @ (B, 4, N) -> (B, 4, N)
+    points_in_camera_frame_homo = camera_view_matrix @ world_pcd_homo
+    
+    # 转换回非齐次坐标 (B, N, 3)
+    points_in_camera_frame = points_in_camera_frame_homo.transpose(1, 2)[:, :, :3]
+
+    # --- 步骤 2: 视锥体裁剪 (Frustum Culling) - 这部分完全不变 ---
+    
+    X, Y, Z = points_in_camera_frame[..., 0], points_in_camera_frame[..., 1], points_in_camera_frame[..., 2]
+
+    # a. 深度裁剪
+    depth_mask = (Z > z_near) & (Z < z_far)
+
+    # b. 视野裁剪
+    u = intrinsics['fx'] * X / Z + intrinsics['cx']
+    v = intrinsics['fy'] * Y / Z + intrinsics['cy']
+    fov_mask = (u >= 0) & (u < intrinsics['width']) & (v >= 0) & (v < intrinsics['height'])
+
+    # 合并掩码，形状 (B, N)
+    visible_mask = depth_mask & fov_mask
+    
+    # --- 步骤 3: 将可见点云变换回世界坐标系 ---
+    # 为了将结果返回到世界坐标系（方便与其他数据一起使用），我们仍然需要位姿矩阵。
+    # 位姿矩阵 = 视图矩阵的逆
+    
+    camera_pose_matrix = torch.inverse(camera_view_matrix)
+    # 我们需要一种高效的方式来只拾取可见点并进行反向变换。
+    # 使用 advanced indexing 会使代码复杂化。一个更简洁的方法是：
+    # 1. 创建一个完整的、变换回世界坐标系的点云。
+    # 2. 使用掩码来筛选它。
+    
+    # (B, 4, 4) @ (B, 4, N) -> (B, 4, N)
+    visible_points_world_homo_all = camera_pose_matrix @ points_in_camera_frame_homo
+    visible_points_world_all = visible_points_world_homo_all.transpose(1, 2)[:, :, :3]
+    
+    # 使用掩码筛选出最终的点云
+    # 注意：这里的 visible_mask 是 (B, N)，visible_points_world_all 是 (B, N, 3)
+    # 筛选后的结果是一个列表，每个元素是每个环境中的可见点云
+    visible_pcd_world = visible_points_world_all[visible_mask]
+
+    return visible_pcd_world, camera_pose_matrix

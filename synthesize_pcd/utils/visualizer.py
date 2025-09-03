@@ -134,7 +134,6 @@ class MultiPointCloudVisualizer:
         self.keep_running = False
         return True
 
-    # <<< 3. 创建一个全新的更新函数，接受多个输入
     def update_geometries(self, global_pcd_tensor, wrist_pcd_tensor, wrist_camera_pose_mat):
         """
         在循环中更新所有几何体（两个点云和一个相机位姿）的数据并渲染。

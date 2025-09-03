@@ -11,7 +11,7 @@ import cv2
 import torch
 import numpy as np
 import imageio
-from synthesize_pcd.utils.furniture import Furniture, sample_points, draw_point_cloud, record_point_cloud_animation_imageio, get_wrist_camera_pcd, get_wrist_camera_pose
+from synthesize_pcd.utils.furniture import Furniture, sample_points, draw_point_cloud, record_point_cloud_animation_imageio, get_wrist_camera_pcd, get_wrist_camera_pose, get_wrist_camera_pcd_from_view_matrix
 from synthesize_pcd.utils.visualizer import PointCloudVisualizer, MultiPointCloudVisualizer
 import open3d as o3d
 import time
@@ -245,16 +245,20 @@ def main():
                 pcd_to_sample_single_env = torch.cat(list(first_env_pcds_parts.values()), dim=0)
                 pcds_sampled = sample_points(pcd_to_sample_single_env, sample_num=4096)
 
+                # wrist_cam_view_matrix = env.get_wrist_projection_view_matrix()
+                # wrist_cam_view_matrix = torch.from_numpy(wrist_cam_view_matrix).float().to(env.device)
+                # wrist_visible_pcd, wrist_camera_pose = get_wrist_camera_pcd_from_view_matrix(pcds_sampled, wrist_cam_view_matrix, wrist_cam_intrinsics)
+
                 ee_pos, ee_quat = env.get_ee_pose_apriltag()
                 wrist_camera_pose = get_wrist_camera_pose(ee_pos, ee_quat, wrist_camera_local_mat)
-                wrist_pcd_samples = get_wrist_camera_pcd(pcds_sampled, wrist_camera_pose, wrist_cam_intrinsics)
+                wrist_visible_pcd = get_wrist_camera_pcd(pcds_sampled, wrist_camera_pose, wrist_cam_intrinsics)
                 # if visualizer.update_point_cloud(pcds_sampled): # 非阻塞式，循环更新点云
                 #     time.sleep(0.01)
                 # else: 
                 #     break
                 visualizer.update_geometries(
                     global_pcd_tensor=pcds_sampled,
-                    wrist_pcd_tensor=wrist_pcd_samples,
+                    wrist_pcd_tensor=wrist_visible_pcd,
                     wrist_camera_pose_mat=wrist_camera_pose
                 )
                 

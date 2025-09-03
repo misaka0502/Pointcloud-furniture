@@ -1149,7 +1149,7 @@ class FurnitureSimEnv(gym.Env):
     
     def get_ee_pose_apriltag(self):
         """Gets end-effector pose in Apriltag coordinate for getting wrist camera transform."""
-        hand_pos = self.rb_states[self.ee_idxs, :3]
+        hand_pos = self.rb_states[self.ee_idxs, :3] # 世界坐标系下
         hand_quat = self.rb_states[self.ee_idxs, 3:7]
         hand_pose_mat_world = C.pose2mat(hand_pos.squeeze(0), hand_quat.squeeze(0), self.device)
         transform_tag_from_sim = self.sim_to_april_mat # 形状: (4, 4)
@@ -1228,6 +1228,11 @@ class FurnitureSimEnv(gym.Env):
         # fmt: on
 
         return P, V
+
+    def get_wrist_projection_view_matrix(self):
+        V = self.isaac_gym.get_camera_view_matrix(self.sim, self.envs[0], self.camera_handles['wrist'][0])
+
+        return V
 
     def _get_observation(self):
         robot_state = self._read_robot_state()
