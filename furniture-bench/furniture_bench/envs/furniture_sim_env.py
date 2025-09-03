@@ -563,6 +563,7 @@ class FurnitureSimEnv(gym.Env):
             self.camera_cfg = camera_cfg
 
             if name == "wrist":
+                camera_cfg.horizontal_fov = 87.0
                 if self.resize_img:
                     camera_cfg.horizontal_fov = 55.0  # Wide view.
                 camera = self.isaac_gym.create_camera_sensor(env, camera_cfg)

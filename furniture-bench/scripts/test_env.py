@@ -163,7 +163,7 @@ def main():
         # ])
         width = 1280
         height = 720
-        fov = 69.4
+        fov = 87.0
         fx = width / (2.0 * np.tan(np.deg2rad(fov / 2.0)))
         fy = fx
         cx = width / 2.0
