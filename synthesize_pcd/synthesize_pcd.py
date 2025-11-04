@@ -127,14 +127,14 @@ def quat_mul_simple(q1, q2):
     
     return torch.tensor([w, x, y, z], device=q1.device, dtype=q1.dtype)
 
-def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_action, device):
+def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_width, device):
     """
-    根据 EE 位置、旋转和夹爪动作计算两个夹爪（left和right）的位姿
+    根据 EE 位置、旋转和夹爪宽度计算两个夹爪（left和right）的位姿
     
     Args:
         ee_pos: EE位置 [3] (x, y, z)
         ee_rot_6d: EE旋转（6D表示）[6]
-        gripper_action: 夹爪动作 [-1: 开, 1: 闭]
+        gripper_width: 实际夹爪宽度（米），范围 [0, 0.065]
         device: torch device
         
     Returns:
@@ -167,14 +167,7 @@ def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_action, device):
     hand_to_finger_in_world = quat_apply_simple(hand_quat, hand_to_finger_in_hand_frame)
     finger_base_pos = hand_pos + hand_to_finger_in_world
     
-    # 计算夹爪开合程度
-    # gripper_action: -1 表示开（max_width），1 表示闭（0）
-    if gripper_action < 0:
-        gripper_width = MAX_GRIPPER_WIDTH
-    else:
-        gripper_width = 0.0
-    
-    # 每个手指的偏移量是 gripper_width / 2
+    # 每个手指的偏移量是 gripper_width / 2（从中心到每个手指）
     finger_offset = gripper_width / 2
     
     # left finger 沿着 +Y 方向（在hand坐标系下）
@@ -226,11 +219,13 @@ def main():
         part_pose['square_table_leg3'] = torch.tensor(data['parts_poses'][i, 21:28], device=furniture.device).unsqueeze(0).expand(N_ENVS, -1)
         part_pose['square_table_leg4'] = torch.tensor(data['parts_poses'][i, 28:35], device=furniture.device).unsqueeze(0).expand(N_ENVS, -1)
         
-        # 获取夹爪位姿（从 action/pos）
+        # 获取夹爪位姿（从 action/pos 和 robot_state）
         action_pos = data['action/pos'][i]  # [10]
+        robot_state = data['robot_state'][i]  # [16]
         ee_pos_robot = torch.tensor(action_pos[:3], device=furniture.device, dtype=torch.float32)
         ee_rot_6d_robot = torch.tensor(action_pos[3:9], device=furniture.device, dtype=torch.float32)
-        gripper_action = action_pos[9]
+        # 使用 robot_state 中的实际夹爪宽度，而不是 action 中的归一化值
+        gripper_width = robot_state[15]  # 实际夹爪宽度（米）
         
         # 将 EE 位姿从机器人基座坐标系转换到 AprilTag 坐标系
         # 1. 先将 6D 旋转转换为四元数
@@ -249,9 +244,9 @@ def main():
         # 提取旋转矩阵的前两列作为 6D 表示
         ee_rot_6d_april = torch.cat([ee_rot_mat_april[:, 0], ee_rot_mat_april[:, 1]])
         
-        # 计算两个手指的位姿（现在使用 AprilTag 坐标系下的 EE 位姿）
+        # 计算两个手指的位姿（现在使用 AprilTag 坐标系下的 EE 位姿和实际夹爪宽度）
         left_finger_pose, right_finger_pose = compute_gripper_poses(
-            ee_pos_april, ee_rot_6d_april, gripper_action, furniture.device
+            ee_pos_april, ee_rot_6d_april, gripper_width, furniture.device
         )
         
         # 添加夹爪位姿到part_pose字典
