@@ -160,35 +160,40 @@ def build_gripper_pcd_in_hand_frame(gripper_pcds, gripper_width, device):
     # finger base 在 hand 坐标系中的位置
     finger_base_z = 0.066  # hand 顶部
     
-    # ✅ 构建右 finger：finger_1 的内侧应该在 -gripper_width/2
-    # 计算需要的 Y 偏移量
-    right_finger_target_inner_y = -gripper_width / 2
-    right_y_shift = right_finger_target_inner_y - finger_1_inner_y
-    
+    # ✅ 构建右 finger（Y < 0）
+    # 原始 finger 内侧朝向 -Y，需要绕 Z 轴旋转 180° 让内侧朝向 +Y（朝向中心）
+    # 旋转 180°: (x, y, z) → (-x, -y, z)
     right_finger_0 = finger_0_original.clone()
+    right_finger_0[:, 0] = -right_finger_0[:, 0]  # X 取反
+    right_finger_0[:, 1] = -right_finger_0[:, 1]  # Y 取反
+    
+    # 旋转后，finger_1 的内侧从 finger_1_inner_y 变成 -finger_1_inner_y
+    right_finger_target_inner_y = -gripper_width / 2
+    right_y_shift = right_finger_target_inner_y - (-finger_1_inner_y)
     right_finger_0[:, 1] += right_y_shift
     right_finger_0[:, 2] += finger_base_z
     
     right_finger_1 = finger_1_original.clone()
+    right_finger_1[:, 0] = -right_finger_1[:, 0]  # X 取反
+    right_finger_1[:, 1] = -right_finger_1[:, 1]  # Y 取反
     right_finger_1[:, 1] += right_y_shift
     right_finger_1[:, 2] += finger_base_z
     
-    # ✅ 构建左 finger：Y 轴镜像，然后 finger_1 的内侧应该在 +gripper_width/2
+    # ✅ 构建左 finger（Y > 0）
+    # 需要内侧朝向 -Y（朝向中心）
+    # 方法：旋转 180° + Y 镜像 = X 取反
+    # 证明：旋转 (x,y)→(-x,-y), 然后 Y 镜像 (-x,-y)→(-x,y)
     left_finger_0 = finger_0_original.clone()
-    left_finger_0[:, 1] = -left_finger_0[:, 1]  # Y 镜像
+    left_finger_0[:, 0] = -left_finger_0[:, 0]  # X 取反
     
-    # ⚠️ 关键：镜像后，原来的 Y_min 变成新的 Y_max，原来的 Y_max 变成新的 Y_min
-    # 镜像后 finger_1 的内侧（新的 Y_min）= -(原来的 Y_max)
-    finger_1_max_y = finger_1_original[:, 1].max().item()
-    left_finger_mirrored_inner_y = -finger_1_max_y
-    
+    # X 取反后，finger_1 的内侧还是 finger_1_inner_y，且仍朝向 -Y
     left_finger_target_inner_y = gripper_width / 2
-    left_y_shift = left_finger_target_inner_y - left_finger_mirrored_inner_y
+    left_y_shift = left_finger_target_inner_y - finger_1_inner_y
     left_finger_0[:, 1] += left_y_shift
     left_finger_0[:, 2] += finger_base_z
     
     left_finger_1 = finger_1_original.clone()
-    left_finger_1[:, 1] = -left_finger_1[:, 1]  # Y 镜像
+    left_finger_1[:, 0] = -left_finger_1[:, 0]  # X 取反
     left_finger_1[:, 1] += left_y_shift
     left_finger_1[:, 2] += finger_base_z
     
