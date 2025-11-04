@@ -163,7 +163,9 @@ def build_gripper_pcd_in_hand_frame(gripper_pcds, gripper_width, device):
     finger_1_centered[:, 1] -= finger_1_y_center
     
     # finger base 在 hand 坐标系中的位置
-    finger_base_offset = torch.tensor([0.0, 0.0, 0.0584, 0.0], device=device, dtype=torch.float32)
+    # ✅ 根据 hand mesh 分析，hand 顶部在 Z=0.066，而不是 hand.xml 中的 0.0584
+    # hand.xml 中的 0.0584 是 joint 位置，在 hand 内部
+    finger_base_offset = torch.tensor([0.0, 0.0, 0.066, 0.0], device=device, dtype=torch.float32)
     
     # 左右 finger 的 Y 偏移
     finger_offset = gripper_width / 2
