@@ -131,9 +131,12 @@ def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_width, device):
     """
     根据 EE 位置、旋转和夹爪宽度计算两个夹爪（left和right）的位姿
     
+    注意：输入的 ee_pos 和 ee_rot_6d 实际上是 panda_hand 的位姿，
+    从 get_ee_pose() 获取，已经包含了相对于 panda_link7 的变换。
+    
     Args:
-        ee_pos: EE位置 [3] (x, y, z)
-        ee_rot_6d: EE旋转（6D表示）[6]
+        ee_pos: hand 位置 [3] (x, y, z)
+        ee_rot_6d: hand 旋转（6D表示）[6]
         gripper_width: 实际夹爪宽度（米），范围 [0, 0.065]
         device: torch device
         
@@ -147,20 +150,13 @@ def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_width, device):
     y = rot_6d[1] - torch.dot(rot_6d[1], x) * x
     y = y / torch.norm(y)
     z = torch.cross(x, y)
-    ee_rot_mat = torch.stack([x, y, z], dim=1)  # [3, 3]
+    hand_rot_mat = torch.stack([x, y, z], dim=1)  # [3, 3]
     
     # 将旋转矩阵转换为四元数 (w, x, y, z)
-    ee_quat = rotation_matrix_to_quaternion_simple(ee_rot_mat)  # [4]
+    hand_quat = rotation_matrix_to_quaternion_simple(hand_rot_mat)  # [4]
     
-    # EE 到 hand 的偏移（在hand坐标系下，EE在hand上方0.1m，根据mjx_panda.xml）
-    # hand 的朝向需要考虑 quat="0.9238795 0 0 -0.3826834"
-    hand_quat_offset = torch.tensor([0.9238795, 0.0, 0.0, -0.3826834], device=device, dtype=torch.float32)
-    hand_quat = quat_mul_simple(ee_quat, hand_quat_offset)
-    
-    # hand位置 = ee位置 - ee_to_hand_offset（在EE坐标系下）
-    ee_to_hand_in_ee_frame = torch.tensor([0.0, 0.0, -0.1], device=device, dtype=torch.float32)
-    ee_to_hand_in_world = quat_apply_simple(ee_quat, ee_to_hand_in_ee_frame)
-    hand_pos = ee_pos + ee_to_hand_in_world
+    # 输入已经是 hand 的位姿，直接使用
+    hand_pos = ee_pos
     
     # finger base 到 hand 的偏移（在hand坐标系下，finger在hand上方0.0584m）
     hand_to_finger_in_hand_frame = torch.tensor([0.0, 0.0, 0.0584], device=device, dtype=torch.float32)
