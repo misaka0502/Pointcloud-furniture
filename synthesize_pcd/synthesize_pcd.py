@@ -13,6 +13,7 @@ import time
 import numpy as np
 from utils.visualizer import PointCloudVisualizer
 from tqdm import tqdm
+from coordinate_transform import robot_pose_to_april_pose
 
 DATA_PATH = "/home2/zxp/Projects/Juicer_ws/juicer_dataset/processed/diffik/sim/one_leg/teleop/low/success.zarr"
 # 使用绝对路径，确保从任何位置运行都能找到资源
@@ -35,11 +36,31 @@ def print_gpu_memory_usage(device, message=""):
             f"Peak Allocated: {peak_allocated:.2f} GiB"
         )
 
+def rotation_6d_to_matrix_simple(d6):
+    """
+    将 6D 旋转表示转换为旋转矩阵 (Gram-Schmidt 正交化)
+    Args:
+        d6: [6] 6D 旋转向量
+    Returns:
+        rot_mat: [3, 3] 旋转矩阵
+    """
+    a1, a2 = d6[:3], d6[3:]
+    
+    # 正交化
+    b1 = torch.nn.functional.normalize(a1, dim=0)
+    b2 = a2 - (b1 * a2).sum() * b1
+    b2 = torch.nn.functional.normalize(b2, dim=0)
+    b3 = torch.cross(b1, b2)
+    
+    return torch.stack([b1, b2, b3], dim=1)
+
 def rotation_matrix_to_quaternion_simple(rot_mat):
     """
-    将旋转矩阵转换为四元数 (w, x, y, z)
-    rot_mat: [3, 3] 旋转矩阵
-    返回: [4] 四元数 (w, x, y, z)
+    将旋转矩阵转换为四元数
+    Args:
+        rot_mat: [3, 3] 旋转矩阵
+    Returns:
+        quat: [4] 四元数 (w, x, y, z)
     """
     trace = rot_mat[0, 0] + rot_mat[1, 1] + rot_mat[2, 2]
     
@@ -207,13 +228,30 @@ def main():
         
         # 获取夹爪位姿（从 action/pos）
         action_pos = data['action/pos'][i]  # [10]
-        ee_pos = torch.tensor(action_pos[:3], device=furniture.device, dtype=torch.float32)
-        ee_rot_6d = torch.tensor(action_pos[3:9], device=furniture.device, dtype=torch.float32)
+        ee_pos_robot = torch.tensor(action_pos[:3], device=furniture.device, dtype=torch.float32)
+        ee_rot_6d_robot = torch.tensor(action_pos[3:9], device=furniture.device, dtype=torch.float32)
         gripper_action = action_pos[9]
         
-        # 计算两个手指的位姿
+        # 将 EE 位姿从机器人基座坐标系转换到 AprilTag 坐标系
+        # 1. 先将 6D 旋转转换为四元数
+        ee_rot_mat = rotation_6d_to_matrix_simple(ee_rot_6d_robot)
+        ee_quat_robot = rotation_matrix_to_quaternion_simple(ee_rot_mat)  # [4] (w,x,y,z)
+        
+        # 2. 坐标系转换：Robot -> AprilTag
+        ee_pos_april, ee_quat_april = robot_pose_to_april_pose(
+            ee_pos_robot, ee_quat_robot, furniture.device
+        )
+        
+        # 3. 将四元数转回旋转矩阵，再转为 6D 表示
+        # 注意：C.quaternion_to_matrix 期望 (x,y,z,w) 格式
+        ee_quat_april_xyzw = torch.cat([ee_quat_april[1:], ee_quat_april[0:1]])  # (w,x,y,z) -> (x,y,z,w)
+        ee_rot_mat_april = C.quaternion_to_matrix(ee_quat_april_xyzw.unsqueeze(0)).squeeze(0)
+        # 提取旋转矩阵的前两列作为 6D 表示
+        ee_rot_6d_april = torch.cat([ee_rot_mat_april[:, 0], ee_rot_mat_april[:, 1]])
+        
+        # 计算两个手指的位姿（现在使用 AprilTag 坐标系下的 EE 位姿）
         left_finger_pose, right_finger_pose = compute_gripper_poses(
-            ee_pos, ee_rot_6d, gripper_action, furniture.device
+            ee_pos_april, ee_rot_6d_april, gripper_action, furniture.device
         )
         
         # 添加夹爪位姿到part_pose字典
