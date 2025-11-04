@@ -131,12 +131,12 @@ def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_width, device):
     """
     根据 EE 位置、旋转和夹爪宽度计算两个夹爪（left和right）的位姿
     
-    注意：输入的 ee_pos 和 ee_rot_6d 实际上是 panda_hand 的位姿，
-    从 get_ee_pose() 获取，已经包含了相对于 panda_link7 的变换。
+    注意：输入的 ee_pos 和 ee_rot_6d 是 AprilTag 坐标系下 panda_hand 的位姿。
+    由于坐标系转换，Z 轴方向翻转了，需要对 hand 朝向进行 180° 修正。
     
     Args:
-        ee_pos: hand 位置 [3] (x, y, z)
-        ee_rot_6d: hand 旋转（6D表示）[6]
+        ee_pos: hand 位置 [3] (x, y, z) - AprilTag 坐标系
+        ee_rot_6d: hand 旋转（6D表示）[6] - AprilTag 坐标系
         gripper_width: 实际夹爪宽度（米），范围 [0, 0.065]
         device: torch device
         
@@ -153,7 +153,11 @@ def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_width, device):
     hand_rot_mat = torch.stack([x, y, z], dim=1)  # [3, 3]
     
     # 将旋转矩阵转换为四元数 (w, x, y, z)
-    hand_quat = rotation_matrix_to_quaternion_simple(hand_rot_mat)  # [4]
+    hand_quat_raw = rotation_matrix_to_quaternion_simple(hand_rot_mat)  # [4]
+    
+    # 由于坐标系转换导致 Z 轴翻转，需要修正 hand 朝向（绕 Z 轴旋转 180°）
+    flip_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device, dtype=torch.float32)  # 180° 绕 Z 轴
+    hand_quat = quat_mul_simple(hand_quat_raw, flip_quat)
     
     # 输入已经是 hand 的位姿，直接使用
     hand_pos = ee_pos
