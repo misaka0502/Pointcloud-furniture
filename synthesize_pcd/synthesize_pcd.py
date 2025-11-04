@@ -297,23 +297,15 @@ def main():
             right_quat_xyzw = torch.cat([right_quat_wxyz[:, 1:4], right_quat_wxyz[:, 0:1]], dim=1)  # (x, y, z, w)
             right_pose_mat = C.batched_pose2mat(right_pose[:, :3], right_quat_xyzw, furniture.device)  # [N_env, 4, 4]
             
-            # ✅ 关键修复：对右手指的点云进行 Y 轴镜像（Y 坐标取反）
-            # 这样左右手指会呈现镜像对称的夹子形状
-            finger_0_mirrored = gripper_pcds['finger_0'].clone()
-            finger_0_mirrored[:, 1] = -finger_0_mirrored[:, 1]  # Y 坐标取反
-            finger_0_mirrored_expanded = finger_0_mirrored.unsqueeze(0).expand(n_envs, -1, -1)
-            
-            finger_1_mirrored = gripper_pcds['finger_1'].clone()
-            finger_1_mirrored[:, 1] = -finger_1_mirrored[:, 1]  # Y 坐标取反
-            finger_1_mirrored_expanded = finger_1_mirrored.unsqueeze(0).expand(n_envs, -1, -1)
-            
+            # ✅ 根据 MuJoCo XML：左右 finger 使用相同的 mesh，不需要镜像
+            # 它们只是位置不同（沿 Y 轴对称分布），但 mesh 本身是相同的
             gripper_pcds_world['finger_0_right'] = torch.matmul(
-                finger_0_mirrored_expanded,  # [N_env, N_points, 4] - 镜像后的
+                finger_0_expanded,  # [N_env, N_points, 4] - 使用相同的点云
                 right_pose_mat.transpose(1, 2)  # [N_env, 4, 4]
             )[:, :, :3]  # [N_env, N_points, 3]
             
             gripper_pcds_world['finger_1_right'] = torch.matmul(
-                finger_1_mirrored_expanded,  # [N_env, N_points, 4] - 镜像后的
+                finger_1_expanded,  # [N_env, N_points, 4] - 使用相同的点云
                 right_pose_mat.transpose(1, 2)  # [N_env, 4, 4]
             )[:, :, :3]  # [N_env, N_points, 3]
         
