@@ -275,7 +275,11 @@ def main():
         if 'finger_0' in gripper_pcds and 'finger_1' in gripper_pcds:
             # Transform left finger parts
             left_pose = part_pose['finger_0_left']
-            left_pose_mat = C.batched_pose2mat(left_pose[:, :3], left_pose[:, 3:7], furniture.device)  # [N_env, 4, 4]
+            # 四元数格式转换：(w,x,y,z) -> (x,y,z,w)
+            # compute_gripper_poses 返回的是 (w,x,y,z)，但 C.batched_pose2mat 期望 (x,y,z,w)
+            left_quat_wxyz = left_pose[:, 3:7]  # (w, x, y, z)
+            left_quat_xyzw = torch.cat([left_quat_wxyz[:, 1:4], left_quat_wxyz[:, 0:1]], dim=1)  # (x, y, z, w)
+            left_pose_mat = C.batched_pose2mat(left_pose[:, :3], left_quat_xyzw, furniture.device)  # [N_env, 4, 4]
             
             # finger_0: [N_points, 4] 齐次坐标
             # 变换: [N_env, N_points, 4] = [N_points, 4] @ [N_env, 4, 4].T
@@ -296,7 +300,10 @@ def main():
             
             # Transform right finger parts
             right_pose = part_pose['finger_0_right']
-            right_pose_mat = C.batched_pose2mat(right_pose[:, :3], right_pose[:, 3:7], furniture.device)  # [N_env, 4, 4]
+            # 四元数格式转换：(w,x,y,z) -> (x,y,z,w)
+            right_quat_wxyz = right_pose[:, 3:7]  # (w, x, y, z)
+            right_quat_xyzw = torch.cat([right_quat_wxyz[:, 1:4], right_quat_wxyz[:, 0:1]], dim=1)  # (x, y, z, w)
+            right_pose_mat = C.batched_pose2mat(right_pose[:, :3], right_quat_xyzw, furniture.device)  # [N_env, 4, 4]
             
             gripper_pcds_world['finger_0_right'] = torch.matmul(
                 finger_0_expanded,  # [N_env, N_points, 4]
