@@ -78,7 +78,7 @@ def robot_pose_to_april_pose(ee_pos, ee_quat, device='cuda:0'):
         
     Returns:
         april_ee_pos: [3] torch.Tensor, EE 在 AprilTag 坐标系下的位置
-        april_ee_quat: [4] torch.Tensor, EE 在 AprilTag 坐标系下的四元数
+        april_ee_quat: [4] torch.Tensor, EE 在 AprilTag 坐标系下的四元数 (w, x, y, z)
     """
     import sys
     import os
@@ -89,8 +89,12 @@ def robot_pose_to_april_pose(ee_pos, ee_quat, device='cuda:0'):
     robot_to_april_np = get_robot_to_april_mat()
     robot_to_april = torch.tensor(robot_to_april_np, device=device, dtype=torch.float32)
     
+    # C.pose2mat 期望四元数格式为 (x, y, z, w)，需要转换
+    # 输入: (w, x, y, z) -> 输出: (x, y, z, w)
+    ee_quat_xyzw = torch.cat([ee_quat[1:], ee_quat[0:1]])
+    
     # 构建 EE 在机器人坐标系下的齐次变换矩阵
-    ee_pose_mat = C.pose2mat(ee_pos, ee_quat, device)
+    ee_pose_mat = C.pose2mat(ee_pos, ee_quat_xyzw, device)
     
     # 转换到 AprilTag 坐标系
     # AprilTag_T_EE = AprilTag_T_Robot @ Robot_T_EE
@@ -98,8 +102,10 @@ def robot_pose_to_april_pose(ee_pos, ee_quat, device='cuda:0'):
     
     # 提取位置和四元数
     april_ee_pos, april_ee_quat = C.mat2pose(april_ee_pose_mat)
+    # C.mat2pose 返回的四元数也是 (x, y, z, w) 格式，转回 (w, x, y, z)
+    april_ee_quat_wxyz = torch.cat([april_ee_quat[3:4], april_ee_quat[0:3]])
     
-    return april_ee_pos, april_ee_quat
+    return april_ee_pos, april_ee_quat_wxyz
 
 
 if __name__ == '__main__':

@@ -95,7 +95,8 @@ def sample_points(points, sample_num: int):
     """
     points: (num_envs, n_points, 3)
     """
-    sampling_idx = torch.randperm(points.shape[1])[:sample_num]
+    # 确保随机采样在正确的设备上，并且每次都不同
+    sampling_idx = torch.randperm(points.shape[1], device=points.device)[:sample_num]
     sampled_points = points[:, sampling_idx, :]
     return sampled_points
 
