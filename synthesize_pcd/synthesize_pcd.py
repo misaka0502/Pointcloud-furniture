@@ -137,8 +137,10 @@ def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_width, device):
     """
     根据 EE 位置、旋转和夹爪宽度计算两个夹爪（left和right）的位姿
     
-    注意：输入的 ee_pos 和 ee_rot_6d 是 AprilTag 坐标系下 panda_hand 的位姿。
-    由于坐标系转换，Z 轴方向翻转了，需要对 hand 朝向进行 180° 修正。
+    严格按照 URDF 定义：
+    - 两根 finger 的基准位置都是 [0, 0, 0.0584]（相对于 panda_hand）
+    - 左 finger 沿 +Y 移动，右 finger 沿 -Y 移动
+    - 两根 finger 的朝向完全相同，不需要旋转！
     
     Args:
         ee_pos: hand 位置 [3] (x, y, z) - AprilTag 坐标系
@@ -150,25 +152,17 @@ def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_width, device):
         left_finger_pose: [7] (pos[3] + quat[4])
         right_finger_pose: [7] (pos[3] + quat[4])
     """
-    # 将6D旋转转换为旋转矩阵
-    rot_6d = ee_rot_6d.reshape(2, 3)
-    x = rot_6d[0] / torch.norm(rot_6d[0])
-    y = rot_6d[1] - torch.dot(rot_6d[1], x) * x
-    y = y / torch.norm(y)
-    z = torch.cross(x, y)
-    hand_rot_mat = torch.stack([x, y, z], dim=1)  # [3, 3]
+    # 将6D旋转转换为旋转矩阵（正确的方式）
+    hand_rot_mat = rotation_6d_to_matrix_simple(ee_rot_6d)  # [3, 3]
     
     # 将旋转矩阵转换为四元数 (w, x, y, z)
-    hand_quat_raw = rotation_matrix_to_quaternion_simple(hand_rot_mat)  # [4]
+    hand_quat = rotation_matrix_to_quaternion_simple(hand_rot_mat)  # [4]
     
-    # 由于坐标系转换导致 Z 轴翻转，需要修正 hand 朝向（绕 Z 轴旋转 180°）
-    flip_quat = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device, dtype=torch.float32)  # 180° 绕 Z 轴
-    hand_quat = quat_mul_simple(hand_quat_raw, flip_quat)
-    
-    # 输入已经是 hand 的位姿，直接使用
+    # hand 的位置
     hand_pos = ee_pos
     
-    # finger base 到 hand 的偏移（在hand坐标系下，finger在hand上方0.0584m）
+    # finger base 到 hand 的偏移（在 hand 坐标系下，finger 在 hand 上方 0.0584m）
+    # 根据 URDF: <origin rpy="0 0 0" xyz="0 0 0.0584"/>
     hand_to_finger_in_hand_frame = torch.tensor([0.0, 0.0, 0.0584], device=device, dtype=torch.float32)
     hand_to_finger_in_world = quat_apply_simple(hand_quat, hand_to_finger_in_hand_frame)
     finger_base_pos = hand_pos + hand_to_finger_in_world
@@ -176,23 +170,24 @@ def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_width, device):
     # 每个手指的偏移量是 gripper_width / 2（从中心到每个手指）
     finger_offset = gripper_width / 2
     
-    # left finger 沿着 +Y 方向（在hand坐标系下）
+    # left finger 沿着 +Y 方向（在 hand 坐标系下）
+    # URDF: <axis xyz="0 1 0"/>
     left_offset_in_hand = torch.tensor([0.0, finger_offset, 0.0], device=device, dtype=torch.float32)
     left_offset_in_world = quat_apply_simple(hand_quat, left_offset_in_hand)
     left_finger_pos = finger_base_pos + left_offset_in_world
     
-    # right finger 沿着 -Y 方向（在hand坐标系下），同时旋转180度
+    # right finger 沿着 -Y 方向（在 hand 坐标系下）
+    # URDF: <axis xyz="0 -1 0"/>
     right_offset_in_hand = torch.tensor([0.0, -finger_offset, 0.0], device=device, dtype=torch.float32)
     right_offset_in_world = quat_apply_simple(hand_quat, right_offset_in_hand)
     right_finger_pos = finger_base_pos + right_offset_in_world
     
-    # right finger 的朝向：相对于 hand 旋转180度（绕Z轴）
-    right_quat_offset = torch.tensor([0.0, 0.0, 0.0, 1.0], device=device, dtype=torch.float32)  # 180度绕Z轴
-    right_finger_quat = quat_mul_simple(hand_quat, right_quat_offset)
+    # ✅ 关键修复：两根 finger 的朝向完全相同！
+    # URDF 中没有给 right finger 任何旋转
     
-    # 返回两个finger的位姿
+    # 返回两个 finger 的位姿
     left_finger_pose = torch.cat([left_finger_pos, hand_quat])  # [7]
-    right_finger_pose = torch.cat([right_finger_pos, right_finger_quat])  # [7]
+    right_finger_pose = torch.cat([right_finger_pos, hand_quat])  # [7] ← 注意：使用相同的 hand_quat
     
     return left_finger_pose, right_finger_pose
 
