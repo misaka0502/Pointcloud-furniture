@@ -141,7 +141,7 @@ def build_gripper_pcd_in_hand_frame(gripper_pcds, gripper_width, device):
     - left_finger 和 right_finger 的基准位置都在 [0, 0, 0.0584] (相对于 hand)
     - left_finger 沿 +Y 方向移动 gripper_width/2
     - right_finger 沿 -Y 方向移动 gripper_width/2
-    - 左右 finger 使用相同的 mesh (finger_0 + finger_1)
+    - ✅ 关键：左右 finger 应该是 Y 轴镜像对称，实现“指腹对指腹”
     
     Args:
         gripper_pcds: dict, 包含 'finger_0' 和 'finger_1' 的齐次坐标 [N, 4]
@@ -151,6 +151,17 @@ def build_gripper_pcd_in_hand_frame(gripper_pcds, gripper_width, device):
     Returns:
         gripper_pcd_local: [N_total, 4] 在 hand 局部坐标系中的完整夹爪点云
     """
+    # ✅ 先将 finger mesh 在 Y 方向上中心化，确保夹爪宽度正确
+    finger_0_centered = gripper_pcds['finger_0'].clone()
+    finger_1_centered = gripper_pcds['finger_1'].clone()
+    
+    # 计算 Y 中心并减去
+    finger_0_y_center = (finger_0_centered[:, 1].min() + finger_0_centered[:, 1].max()) / 2
+    finger_1_y_center = (finger_1_centered[:, 1].min() + finger_1_centered[:, 1].max()) / 2
+    
+    finger_0_centered[:, 1] -= finger_0_y_center
+    finger_1_centered[:, 1] -= finger_1_y_center
+    
     # finger base 在 hand 坐标系中的位置
     finger_base_offset = torch.tensor([0.0, 0.0, 0.0584, 0.0], device=device, dtype=torch.float32)
     
@@ -159,13 +170,18 @@ def build_gripper_pcd_in_hand_frame(gripper_pcds, gripper_width, device):
     left_y_offset = torch.tensor([0.0, finger_offset, 0.0, 0.0], device=device, dtype=torch.float32)
     right_y_offset = torch.tensor([0.0, -finger_offset, 0.0, 0.0], device=device, dtype=torch.float32)
     
-    # 构建左 finger 点云 (finger_0 + finger_1)
-    left_finger_0 = gripper_pcds['finger_0'] + finger_base_offset + left_y_offset
-    left_finger_1 = gripper_pcds['finger_1'] + finger_base_offset + left_y_offset
+    # ✅ 构建右 finger 点云（使用中心化后的 mesh）
+    right_finger_0 = finger_0_centered + finger_base_offset + right_y_offset
+    right_finger_1 = finger_1_centered + finger_base_offset + right_y_offset
     
-    # 构建右 finger 点云 (finger_0 + finger_1)
-    right_finger_0 = gripper_pcds['finger_0'] + finger_base_offset + right_y_offset
-    right_finger_1 = gripper_pcds['finger_1'] + finger_base_offset + right_y_offset
+    # ✅ 构建左 finger 点云（Y 轴镜像 + 偏移）
+    left_finger_0_mirrored = finger_0_centered.clone()
+    left_finger_0_mirrored[:, 1] = -left_finger_0_mirrored[:, 1]  # Y 镜像
+    left_finger_0 = left_finger_0_mirrored + finger_base_offset + left_y_offset
+    
+    left_finger_1_mirrored = finger_1_centered.clone()
+    left_finger_1_mirrored[:, 1] = -left_finger_1_mirrored[:, 1]  # Y 镜像
+    left_finger_1 = left_finger_1_mirrored + finger_base_offset + left_y_offset
     
     # 合并所有点云
     gripper_pcd_local = torch.cat([

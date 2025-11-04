@@ -24,14 +24,12 @@ def get_pcd_from_offline_data(asset_path: str, device: int = 'cuda'):
         
         point_cloud_data = np.load(file_path)
         
-        # 修复：finger 点云的局部坐标系原点在底部，需要调整
-        # 让 Z 坐标围绕原点，与家具零件的坐标系保持一致
+        # ✅ 根据 URDF，finger 的局部坐标系原点应该在底部（finger_base）
+        # 不需要中心化，保持原始 Z 坐标
         if 'finger' in part_name:
             z_min = point_cloud_data[:, 2].min()
             z_max = point_cloud_data[:, 2].max()
-            z_center = (z_min + z_max) / 2
-            point_cloud_data[:, 2] -= z_center
-            print(f"  - {part_name}: Z 坐标已调整 (原范围: [{z_min:.4f}, {z_max:.4f}] → 中心化)")
+            print(f"  - {part_name}: Z 范围 [{z_min:.4f}, {z_max:.4f}] (原点在底部，符合 URDF)")
         
         point_clouds_dict[part_name] = C.xyz_to_homogeneous(
             torch.tensor(
