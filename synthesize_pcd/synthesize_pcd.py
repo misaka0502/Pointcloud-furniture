@@ -133,63 +133,49 @@ def quat_mul_simple(q1, q2):
     
     return torch.tensor([w, x, y, z], device=q1.device, dtype=q1.dtype)
 
-def compute_gripper_poses(ee_pos, ee_rot_mat, gripper_width, device):
+def build_gripper_pcd_in_hand_frame(gripper_pcds, gripper_width, device):
     """
-    根据 EE 位置、旋转和夹爪宽度计算两个夹爪（left和right）的位姿
+    在 hand 局部坐标系中构建完整的夹爪点云
     
-    严格按照 URDF 定义：
-    - 两根 finger 的基准位置都是 [0, 0, 0.0584]（相对于 panda_hand）
-    - 左 finger 沿 +Y 移动，右 finger 沿 -Y 移动
-    - 两根 finger 的朝向完全相同，不需要旋转！
+    根据 URDF/XML 结构：
+    - left_finger 和 right_finger 的基准位置都在 [0, 0, 0.0584] (相对于 hand)
+    - left_finger 沿 +Y 方向移动 gripper_width/2
+    - right_finger 沿 -Y 方向移动 gripper_width/2
+    - 左右 finger 使用相同的 mesh (finger_0 + finger_1)
     
     Args:
-        ee_pos: hand 位置 [3] (x, y, z) - AprilTag 坐标系
-        ee_rot_mat: hand 旋转矩阵 [3, 3] - AprilTag 坐标系
-        gripper_width: 实际夹爪宽度（米），范围 [0, 0.065]
+        gripper_pcds: dict, 包含 'finger_0' 和 'finger_1' 的齐次坐标 [N, 4]
+        gripper_width: float, 夹爪宽度
         device: torch device
-        
+    
     Returns:
-        left_finger_pose: [7] (pos[3] + quat[4])
-        right_finger_pose: [7] (pos[3] + quat[4])
+        gripper_pcd_local: [N_total, 4] 在 hand 局部坐标系中的完整夹爪点云
     """
-    # 直接使用传入的旋转矩阵
-    hand_rot_mat = ee_rot_mat
+    # finger base 在 hand 坐标系中的位置
+    finger_base_offset = torch.tensor([0.0, 0.0, 0.0584, 0.0], device=device, dtype=torch.float32)
     
-    # 将旋转矩阵转换为四元数 (w, x, y, z)
-    hand_quat = rotation_matrix_to_quaternion_simple(hand_rot_mat)  # [4]
-    
-    # hand 的位置
-    hand_pos = ee_pos
-    
-    # finger base 到 hand 的偏移（在 hand 坐标系下，finger 在 hand 上方 0.0584m）
-    # 根据 URDF: <origin rpy="0 0 0" xyz="0 0 0.0584"/>
-    hand_to_finger_in_hand_frame = torch.tensor([0.0, 0.0, 0.0584], device=device, dtype=torch.float32)
-    hand_to_finger_in_world = quat_apply_simple(hand_quat, hand_to_finger_in_hand_frame)
-    finger_base_pos = hand_pos + hand_to_finger_in_world
-    
-    # 每个手指的偏移量是 gripper_width / 2（从中心到每个手指）
+    # 左右 finger 的 Y 偏移
     finger_offset = gripper_width / 2
+    left_y_offset = torch.tensor([0.0, finger_offset, 0.0, 0.0], device=device, dtype=torch.float32)
+    right_y_offset = torch.tensor([0.0, -finger_offset, 0.0, 0.0], device=device, dtype=torch.float32)
     
-    # left finger 沿着 +Y 方向（在 hand 坐标系下）
-    # URDF: <axis xyz="0 1 0"/>
-    left_offset_in_hand = torch.tensor([0.0, finger_offset, 0.0], device=device, dtype=torch.float32)
-    left_offset_in_world = quat_apply_simple(hand_quat, left_offset_in_hand)
-    left_finger_pos = finger_base_pos + left_offset_in_world
+    # 构建左 finger 点云 (finger_0 + finger_1)
+    left_finger_0 = gripper_pcds['finger_0'] + finger_base_offset + left_y_offset
+    left_finger_1 = gripper_pcds['finger_1'] + finger_base_offset + left_y_offset
     
-    # right finger 沿着 -Y 方向（在 hand 坐标系下）
-    # URDF: <axis xyz="0 -1 0"/>
-    right_offset_in_hand = torch.tensor([0.0, -finger_offset, 0.0], device=device, dtype=torch.float32)
-    right_offset_in_world = quat_apply_simple(hand_quat, right_offset_in_hand)
-    right_finger_pos = finger_base_pos + right_offset_in_world
+    # 构建右 finger 点云 (finger_0 + finger_1)
+    right_finger_0 = gripper_pcds['finger_0'] + finger_base_offset + right_y_offset
+    right_finger_1 = gripper_pcds['finger_1'] + finger_base_offset + right_y_offset
     
-    # 根据 URDF：两根 finger 使用相同的朝向，只是位置不同
-    # finger_0 + finger_1 的点云组合应该已经设计为可以直接使用
+    # 合并所有点云
+    gripper_pcd_local = torch.cat([
+        left_finger_0,
+        left_finger_1,
+        right_finger_0,
+        right_finger_1
+    ], dim=0)  # [N_total, 4]
     
-    left_finger_pose = torch.cat([left_finger_pos, hand_quat])  # [7]
-    right_finger_pose = torch.cat([right_finger_pos, hand_quat])  # [7]
-    
-    return left_finger_pose, right_finger_pose
-
+    return gripper_pcd_local
 
 def main():
     data = read_zarr(DATA_PATH)
@@ -242,14 +228,10 @@ def main():
         ee_quat_april_xyzw = torch.cat([ee_quat_april[1:], ee_quat_april[0:1]])  # (w,x,y,z) -> (x,y,z,w)
         ee_rot_mat_april = C.quaternion_to_matrix(ee_quat_april_xyzw.unsqueeze(0)).squeeze(0)
         
-        # 计算两个手指的位姿（直接传入旋转矩阵，避免重复转换）
-        left_finger_pose, right_finger_pose = compute_gripper_poses(
-            ee_pos_april, ee_rot_mat_april, gripper_width, furniture.device
-        )
-        
-        # 添加夹爪位姿到part_pose字典
-        part_pose['finger_0_left'] = left_finger_pose.unsqueeze(0).expand(N_ENVS, -1)
-        part_pose['finger_0_right'] = right_finger_pose.unsqueeze(0).expand(N_ENVS, -1)
+        # ✅ 使用新方法：直接存储 hand 的位姿，不需要单独计算左右 finger
+        # ee_pose = (pos[3] + quat[4])  quat 格式为 (w,x,y,z)
+        ee_pose = torch.cat([ee_pos_april, ee_quat_april])  # [7]
+        part_pose['gripper'] = ee_pose.unsqueeze(0).expand(N_ENVS, -1)  # [N_env, 7]
         if i == 0:
             print_gpu_memory_usage(furniture.device, "begin to synthesize point cloud")
         
@@ -261,57 +243,37 @@ def main():
         # 处理家具点云合成
         furniture.get_pcd_from_offline_data(part_pose)
         
-        # 处理夹爪点云
-        gripper_pcds_world = {}
-        # Left finger (两个部分：finger_0 和 finger_1)
+        # ✅ 处理夹爪点云：先在局部坐标系构建，再整体变换
         if 'finger_0' in gripper_pcds and 'finger_1' in gripper_pcds:
-            # Transform left finger parts
-            left_pose = part_pose['finger_0_left']
-            # 四元数格式转换：(w,x,y,z) -> (x,y,z,w)
-            # compute_gripper_poses 返回的是 (w,x,y,z)，但 C.batched_pose2mat 期望 (x,y,z,w)
-            left_quat_wxyz = left_pose[:, 3:7]  # (w, x, y, z)
-            left_quat_xyzw = torch.cat([left_quat_wxyz[:, 1:4], left_quat_wxyz[:, 0:1]], dim=1)  # (x, y, z, w)
-            left_pose_mat = C.batched_pose2mat(left_pose[:, :3], left_quat_xyzw, furniture.device)  # [N_env, 4, 4]
+            # 1. 在 hand 局部坐标系中构建完整的夹爪点云
+            gripper_pcd_local = build_gripper_pcd_in_hand_frame(
+                gripper_pcds, gripper_width, furniture.device
+            )  # [N_total, 4]
             
-            # finger_0: [N_points, 4] 齐次坐标
-            # 变换: [N_env, N_points, 4] = [N_points, 4] @ [N_env, 4, 4].T
-            # 扩展gripper_pcds以匹配环境数量
-            n_envs = left_pose_mat.shape[0]
-            finger_0_expanded = gripper_pcds['finger_0'].unsqueeze(0).expand(n_envs, -1, -1)  # [N_env, N_points, 4]
-            finger_1_expanded = gripper_pcds['finger_1'].unsqueeze(0).expand(n_envs, -1, -1)  # [N_env, N_points, 4]
+            # 2. 用 ee_pose 将整个夹爪变换到世界坐标系
+            gripper_pose = part_pose['gripper']  # [N_env, 7] (pos[3] + quat[4], quat 为 w,x,y,z)
             
-            gripper_pcds_world['finger_0_left'] = torch.matmul(
-                finger_0_expanded,  # [N_env, N_points, 4]
-                left_pose_mat.transpose(1, 2)  # [N_env, 4, 4]
-            )[:, :, :3]  # [N_env, N_points, 3] - 只取xyz坐标
+            # ✅ batched_pose2mat 接受 (w,x,y,z) 格式，不需要转换
+            gripper_pose_mat = C.batched_pose2mat(
+                gripper_pose[:, :3],      # [N_env, 3] 位置
+                gripper_pose[:, 3:7],     # [N_env, 4] 四元数 (w,x,y,z)
+                furniture.device
+            )  # [N_env, 4, 4]
             
-            gripper_pcds_world['finger_1_left'] = torch.matmul(
-                finger_1_expanded,  # [N_env, N_points, 4]
-                left_pose_mat.transpose(1, 2)  # [N_env, 4, 4]
-            )[:, :, :3]  # [N_env, N_points, 3]
+            # 3. 广播 gripper_pcd_local 到所有环境
+            n_envs = gripper_pose_mat.shape[0]
+            gripper_pcd_local_expanded = gripper_pcd_local.unsqueeze(0).expand(n_envs, -1, -1)  # [N_env, N_total, 4]
             
-            # Transform right finger parts
-            right_pose = part_pose['finger_0_right']
-            # 四元数格式转换：(w,x,y,z) -> (x,y,z,w)
-            right_quat_wxyz = right_pose[:, 3:7]  # (w, x, y, z)
-            right_quat_xyzw = torch.cat([right_quat_wxyz[:, 1:4], right_quat_wxyz[:, 0:1]], dim=1)  # (x, y, z, w)
-            right_pose_mat = C.batched_pose2mat(right_pose[:, :3], right_quat_xyzw, furniture.device)  # [N_env, 4, 4]
-            
-            # ✅ 根据 MuJoCo XML：左右 finger 使用相同的 mesh，不需要镜像
-            # 它们只是位置不同（沿 Y 轴对称分布），但 mesh 本身是相同的
-            gripper_pcds_world['finger_0_right'] = torch.matmul(
-                finger_0_expanded,  # [N_env, N_points, 4] - 使用相同的点云
-                right_pose_mat.transpose(1, 2)  # [N_env, 4, 4]
-            )[:, :, :3]  # [N_env, N_points, 3]
-            
-            gripper_pcds_world['finger_1_right'] = torch.matmul(
-                finger_1_expanded,  # [N_env, N_points, 4] - 使用相同的点云
-                right_pose_mat.transpose(1, 2)  # [N_env, 4, 4]
-            )[:, :, :3]  # [N_env, N_points, 3]
+            # 4. 应用变换
+            gripper_pcd_world = torch.matmul(
+                gripper_pcd_local_expanded,
+                gripper_pose_mat.transpose(1, 2)
+            )[:, :, :3]  # [N_env, N_total, 3]
         
         # 分别采样家具和夹爪点云，避免夹爪被过度稀疏化
         furniture_pcd = torch.cat(list(furniture.parts_pcds_world.values()), dim=1)  # [N_env, ~214k, 3]
-        gripper_pcd = torch.cat(list(gripper_pcds_world.values()), dim=1)  # [N_env, ~636, 3]
+        # gripper_pcd_world 现在是一个整体的张量，不是字典
+        gripper_pcd = gripper_pcd_world  # [N_env, N_total, 3]
         
         # 为夹爪分配固定采样点数
         gripper_sample_num = 512
@@ -339,10 +301,8 @@ def main():
             dim=0
         ).unsqueeze(0)  # [1, ~214k, 3]
         
-        first_env_gripper = torch.cat(
-            [batched_pcd[0] for batched_pcd in gripper_pcds_world.values()],
-            dim=0
-        ).unsqueeze(0)  # [1, ~636, 3]
+        # gripper_pcd_world 现在是张量 [N_env, N_total, 3]
+        first_env_gripper = gripper_pcd_world[0].unsqueeze(0)  # [1, N_total, 3]
         
         # 分别采样
         gripper_vis_sample = 512
