@@ -133,7 +133,7 @@ def quat_mul_simple(q1, q2):
     
     return torch.tensor([w, x, y, z], device=q1.device, dtype=q1.dtype)
 
-def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_width, device):
+def compute_gripper_poses(ee_pos, ee_rot_mat, gripper_width, device):
     """
     根据 EE 位置、旋转和夹爪宽度计算两个夹爪（left和right）的位姿
     
@@ -144,7 +144,7 @@ def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_width, device):
     
     Args:
         ee_pos: hand 位置 [3] (x, y, z) - AprilTag 坐标系
-        ee_rot_6d: hand 旋转（6D表示）[6] - AprilTag 坐标系
+        ee_rot_mat: hand 旋转矩阵 [3, 3] - AprilTag 坐标系
         gripper_width: 实际夹爪宽度（米），范围 [0, 0.065]
         device: torch device
         
@@ -152,8 +152,8 @@ def compute_gripper_poses(ee_pos, ee_rot_6d, gripper_width, device):
         left_finger_pose: [7] (pos[3] + quat[4])
         right_finger_pose: [7] (pos[3] + quat[4])
     """
-    # 将6D旋转转换为旋转矩阵（正确的方式）
-    hand_rot_mat = rotation_6d_to_matrix_simple(ee_rot_6d)  # [3, 3]
+    # 直接使用传入的旋转矩阵
+    hand_rot_mat = ee_rot_mat
     
     # 将旋转矩阵转换为四元数 (w, x, y, z)
     hand_quat = rotation_matrix_to_quaternion_simple(hand_rot_mat)  # [4]
@@ -238,16 +238,14 @@ def main():
             ee_pos_robot, ee_quat_robot, furniture.device
         )
         
-        # 3. 将四元数转回旋转矩阵，再转为 6D 表示
+        # 3. 将四元数转回旋转矩阵
         # 注意：C.quaternion_to_matrix 期望 (x,y,z,w) 格式
         ee_quat_april_xyzw = torch.cat([ee_quat_april[1:], ee_quat_april[0:1]])  # (w,x,y,z) -> (x,y,z,w)
         ee_rot_mat_april = C.quaternion_to_matrix(ee_quat_april_xyzw.unsqueeze(0)).squeeze(0)
-        # 提取旋转矩阵的前两列作为 6D 表示
-        ee_rot_6d_april = torch.cat([ee_rot_mat_april[:, 0], ee_rot_mat_april[:, 1]])
         
-        # 计算两个手指的位姿（现在使用 AprilTag 坐标系下的 EE 位姿和实际夹爪宽度）
+        # 计算两个手指的位姿（直接传入旋转矩阵，避免重复转换）
         left_finger_pose, right_finger_pose = compute_gripper_poses(
-            ee_pos_april, ee_rot_6d_april, gripper_width, furniture.device
+            ee_pos_april, ee_rot_mat_april, gripper_width, furniture.device
         )
         
         # 添加夹爪位姿到part_pose字典
