@@ -302,20 +302,19 @@ def main():
                 right_pose_mat.transpose(1, 2)  # [N_env, 4, 4]
             )[:, :, :3]  # [N_env, N_points, 3]
         
-        # 分别处理家具和夹爪点云，夹爪点少不采样，保留全部
+        # 分别采样家具和夹爪点云，避免夹爪被过度稀疏化
         furniture_pcd = torch.cat(list(furniture.parts_pcds_world.values()), dim=1)  # [N_env, ~214k, 3]
         gripper_pcd = torch.cat(list(gripper_pcds_world.values()), dim=1)  # [N_env, ~636, 3]
         
-        # 夹爪不采样，保留全部点
-        gripper_all = gripper_pcd  # 保留全部 ~636 个点
-        gripper_num = gripper_pcd.shape[1]
+        # 为夹爪分配固定采样点数
+        gripper_sample_num = 512
+        furniture_sample_num = 4096 - gripper_sample_num  # 3584 个点
         
-        # 家具采样到剩余的点数
-        furniture_sample_num = 4096 - gripper_num  # 约 3460 个点
         furniture_sampled = sample_points(furniture_pcd, sample_num=furniture_sample_num)
+        gripper_sampled = sample_points(gripper_pcd, sample_num=gripper_sample_num)
         
-        # 合并：家具采样 + 夹爪全部
-        pcds_sampled = torch.cat([furniture_sampled, gripper_all], dim=1)  # [N_env, 4096, 3]
+        # 合并：家具采样 + 夹爪采样
+        pcds_sampled = torch.cat([furniture_sampled, gripper_sampled], dim=1)  # [N_env, 4096, 3]
         
         if i == 0:
             print_gpu_memory_usage(furniture.device, "finish synthesize point cloud")
@@ -327,7 +326,7 @@ def main():
             if i >= warmup_frames:
                 timings.append(elapsed_time)
 
-        # 提取第一个环境的点云（家具 + 夹爪）- 夹爪不采样保留全部
+        # 提取第一个环境的点云（家具 + 夹爪）- 分别采样
         first_env_furniture = torch.cat(
             [batched_pcd[0] for batched_pcd in furniture.parts_pcds_world.values()],
             dim=0
@@ -338,23 +337,33 @@ def main():
             dim=0
         ).unsqueeze(0)  # [1, ~636, 3]
         
-        # 夹爪不采样，保留全部
-        gripper_vis_all = first_env_gripper  # 保留全部点
-        gripper_vis_num = first_env_gripper.shape[1]
+        # 分别采样
+        gripper_vis_sample = 512
+        furniture_vis_sample = 4096 - gripper_vis_sample
         
-        # 家具采样到剩余点数
-        furniture_vis_sample = 4096 - gripper_vis_num
         furniture_vis_sampled = sample_points(first_env_furniture, sample_num=furniture_vis_sample)
+        gripper_vis_sampled = sample_points(first_env_gripper, sample_num=gripper_vis_sample)
         
-        # 合并用于可视化：家具采样 + 夹爪全部
-        pcds_sampled_vis = torch.cat([furniture_vis_sampled, gripper_vis_all], dim=1)
+        # 合并用于可视化：家具采样 + 夹爪采样
+        pcds_sampled_vis = torch.cat([furniture_vis_sampled, gripper_vis_sampled], dim=1)
         pcd_animation_sequence.append(pcds_sampled_vis)
         # draw_point_cloud(pcds_sampled_vis) # 阻塞式，需要关掉窗口才能显示下一个点云
         if visualizer is not None:
-            if visualizer.update_point_cloud(pcds_sampled_vis): # 非阻塞式，循环更新点云
-                time.sleep(0.01)
-            else: 
+            # 持续更新当前帧，直到不再暂停或窗口关闭
+            while True:
+                if not visualizer.update_point_cloud(pcds_sampled_vis):
+                    # 窗口关闭
+                    break
+                if not visualizer.paused:
+                    # 未暂停，推进到下一帧
+                    break
+                time.sleep(0.01)  # 暂停时降低 CPU 使用
+            
+            # 如果窗口已关闭，退出主循环
+            if not visualizer.keep_running:
                 break
+            
+            time.sleep(0.01)
     
     print("\n--- Final Memory Usage ---")
     print_gpu_memory_usage(furniture.device, "Final State")

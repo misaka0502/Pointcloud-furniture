@@ -50,12 +50,26 @@ class PointCloudVisualizer:
         
         self.is_initialized = True
         self.keep_running = True
-        self.visualizer.register_key_callback(27, self._exit_callback)
+        self.paused = False  # 暂停状态
+        self.visualizer.register_key_callback(27, self._exit_callback)  # ESC 键退出
+        self.visualizer.register_key_callback(ord('S'), self._toggle_pause_callback)  # S 键暂停/继续
         print("Visualizer initialized. Starting animation loop...")
+        print("  - Press 'S' to pause/resume")
+        print("  - Press 'ESC' to exit")
 
     def _exit_callback(self, vis):
         print("Exit signal received. Shutting down.")
         self.keep_running = False
+        return False
+    
+    def _toggle_pause_callback(self, vis):
+        """切换暂停/继续状态"""
+        self.paused = not self.paused
+        if self.paused:
+            print("⏸  Paused - You can still rotate the view with mouse")
+        else:
+            print("▶  Resumed")
+        return False
 
     def update_point_cloud(self, pcd_tensor):
         """
@@ -70,6 +84,12 @@ class PointCloudVisualizer:
         if not self.keep_running:
             self.close()
             return False
+
+        # 如果暂停，只处理事件（允许鼠标交互）但不更新点云
+        if self.paused:
+            self.visualizer.poll_events()
+            self.visualizer.update_renderer()
+            return True  # 返回 True 但不推进动画
 
         # 1. 将 PyTorch 张量转换为 NumPy 数组
         points_np = pcd_tensor.squeeze().cpu().numpy()
