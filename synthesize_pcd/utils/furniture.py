@@ -1,5 +1,4 @@
-import furniture_bench.controllers.control_utils as C
-import utils.fb_control_utils as CC
+import utils.fb_control_utils as C
 import torch
 import os
 import glob
@@ -26,14 +25,12 @@ def print_gpu_memory_usage(device, message=""):
 class Furniture:
     def __init__(self, asset_path: str, device: str='cpu', downsample_voxel_size=0.01):
         if not os.path.isdir(asset_path):
-            print(f"Error: directory '{asset_path}' do not exist。")
-            return {}
+            raise ValueError(f"Error: directory '{asset_path}' does not exist.")
         
         pattern = os.path.join(asset_path, '*.npy')
         npy_file_paths = glob.glob(pattern)
         if not npy_file_paths:
-            print(f"Warning: in directory '{asset_path}' do not find .npy files。")
-            return {}
+            raise ValueError(f"Warning: no .npy files found in directory '{asset_path}'.")
 
         self.downsample_voxel_size = downsample_voxel_size
         self.local_point_clouds_dict = {} # init a dict to storage pcd
@@ -42,6 +39,10 @@ class Furniture:
             filename_with_ext = os.path.basename(file_path)
             
             part_name = os.path.splitext(filename_with_ext)[0]
+            
+            # 跳过夹爪部件（这些会在另外的地方单独处理）
+            if 'finger' in part_name:
+                continue
             
             point_cloud_data = np.load(file_path)
 
@@ -75,7 +76,7 @@ class Furniture:
             part_pos, part_quat = part_poses[:, :3], part_poses[:, 3:]
             # quaternion_to_matrix assumes real part first
             part_quat = part_quat[..., [3, 0, 1, 2]]
-            part_tf = CC.batched_pose2mat(
+            part_tf = C.batched_pose2mat(
                 part_pos, part_quat, device=self.device
             )  # (num_envs, 4, 4)
             part_pcd_transformed = part_tf @ local_pcd.T  # (num_envs, 4, n_points)
