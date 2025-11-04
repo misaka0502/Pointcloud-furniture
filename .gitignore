@@ -116,3 +116,5 @@ dmypy.json
 data/
 
 images/
+
+transic-envs/
