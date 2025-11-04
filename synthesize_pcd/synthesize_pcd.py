@@ -157,8 +157,12 @@ def build_gripper_pcd_in_hand_frame(gripper_pcds, gripper_width, device):
     # ✅ 关键：找到 finger_1 的内侧位置（Y 最小值）
     finger_1_inner_y = finger_1_original[:, 1].min().item()  # 内侧位置
     
-    # finger base 在 hand 坐标系中的位置
-    finger_base_z = 0.066  # hand 顶部
+    # finger base 在 EE (gripper site) 坐标系中的位置
+    # 根据 mjx_panda.xml:
+    #   - gripper site 在 hand 上方: pos="0 0 0.1"
+    #   - finger_base 在 hand 上方: pos="0 0 0.0584"
+    #   - 所以 finger_base 相对于 gripper site: 0.0584 - 0.1 = -0.0416
+    finger_base_z = -0.0416
     
     # ✅ 构建右 finger（Y < 0）
     # 原始 finger 内侧朝向 -Y，需要绕 Z 轴旋转 180° 让内侧朝向 +Y（朝向中心）
