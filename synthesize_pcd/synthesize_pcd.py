@@ -39,10 +39,13 @@ def print_gpu_memory_usage(device, message=""):
 def rotation_6d_to_matrix_simple(d6):
     """
     将 6D 旋转表示转换为旋转矩阵 (Gram-Schmidt 正交化)
+    
+    参考：furniture_bench/controllers/control_utils.py::rotation_6d_to_matrix
+    
     Args:
         d6: [6] 6D 旋转向量
     Returns:
-        rot_mat: [3, 3] 旋转矩阵
+        rot_mat: [3, 3] 旋转矩阵（行向量形式）
     """
     a1, a2 = d6[:3], d6[3:]
     
@@ -52,7 +55,10 @@ def rotation_6d_to_matrix_simple(d6):
     b2 = torch.nn.functional.normalize(b2, dim=0)
     b3 = torch.cross(b1, b2)
     
-    return torch.stack([b1, b2, b3], dim=1)
+    # 关键修复：按行堆叠，而不是按列！
+    # dim=0 表示在第0维（行）堆叠，得到 [3, 3] 矩阵
+    # 其中第1行是 b1，第2行是 b2，第3行是 b3
+    return torch.stack([b1, b2, b3], dim=0)
 
 def rotation_matrix_to_quaternion_simple(rot_mat):
     """
