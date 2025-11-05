@@ -16,7 +16,7 @@ from tqdm import tqdm
 from utils.coordinate_transform import robot_pose_to_april_pose
 from utils.gripper_pcd_utils import synthesize_gripper_pcd, build_gripper_pcd_in_hand_frame
 
-DATA_PATH = "/home2/zxp/Projects/Juicer_ws/juicer_dataset/processed/diffik/sim/one_leg/teleop/low/success.zarr"
+DATA_PATH = "/home/rlg3/projects/6D-Manipulation/data/processed/diffik/sim/one_leg/teleop/low/success.zarr"
 # 使用绝对路径，确保从任何位置运行都能找到资源
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSET_PATH = os.path.join(SCRIPT_DIR, 'assets/furniture_bench/mesh/square_table')
@@ -123,8 +123,8 @@ def main():
         first_env_gripper = gripper_pcd_world[0].unsqueeze(0)  # [1, N_total, 3]
         
         # 分别采样
-        gripper_vis_sample = 256
-        furniture_vis_sample = 4096 - gripper_vis_sample
+        gripper_vis_sample = 512
+        furniture_vis_sample = 8192 - gripper_vis_sample
         
         furniture_vis_sampled = sample_points(first_env_furniture, sample_num=furniture_vis_sample)
         gripper_vis_sampled = sample_points(first_env_gripper, sample_num=gripper_vis_sample)
@@ -172,7 +172,7 @@ def main():
             print("没有生成任何点云数据用于播放。")
 
 if __name__ == '__main__':
-    RENDER = False
+    RENDER = True
     N_ENVS = 1
     COMPUTE_FPS = True
     main()
