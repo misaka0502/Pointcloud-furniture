@@ -80,8 +80,8 @@ def replay_point_cloud_animation(zarr_path, num_frames=None, fps=30, device='cud
         # 获取夹爪位姿
         action_pos = data['action/pos'][i]
         robot_state = data['robot_state'][i]
-        ee_pos_robot = torch.tensor(action_pos[:3], device=device, dtype=torch.float32)
-        ee_rot_6d_robot = torch.tensor(action_pos[3:9], device=device, dtype=torch.float32)
+        ee_pos_robot = torch.tensor(robot_state[:3], device=device, dtype=torch.float32)
+        ee_rot_6d_robot = torch.tensor(robot_state[3:9], device=device, dtype=torch.float32)
         gripper_width = robot_state[15]  # 实际夹爪宽度（米）
         
         # 生成家具点云
@@ -107,7 +107,7 @@ def replay_point_cloud_animation(zarr_path, num_frames=None, fps=30, device='cud
         
         # 分别采样以控制点云密度
         gripper_vis_sample = 512
-        furniture_vis_sample = 8192 - gripper_vis_sample
+        furniture_vis_sample = 4096 - gripper_vis_sample
         
         furniture_vis_sampled = sample_points(first_env_furniture, sample_num=furniture_vis_sample)
         gripper_vis_sampled = sample_points(first_env_gripper, sample_num=gripper_vis_sample)
