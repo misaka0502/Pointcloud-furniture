@@ -13,7 +13,7 @@ import time
 import numpy as np
 from utils.visualizer import PointCloudVisualizer
 from tqdm import tqdm
-from utils.coordinate_transform import robot_pose_to_april_pose
+from utils.coordinate_transform import robot_pose_to_april_pose, transform_pcd_april_to_robot
 from utils.gripper_pcd_utils import synthesize_gripper_pcd, build_gripper_pcd_in_hand_frame
 
 DATA_PATH = "/home/rlg3/projects/6D-Manipulation/data/processed/diffik/sim/one_leg/teleop/low/success.zarr"
@@ -131,12 +131,18 @@ def main():
         
         # 合并用于可视化：家具采样 + 夹爪采样
         pcds_sampled_vis = torch.cat([furniture_vis_sampled, gripper_vis_sampled], dim=1)
-        pcd_animation_sequence.append(pcds_sampled_vis)
-        # draw_point_cloud(pcds_sampled_vis) # 阻塞式，需要关掉窗口才能显示下一个点云
+        
+        # ✅ 关键修复：将点云从 AprilTag 坐标系转换到机器人坐标系
+        # 使其与 action 坐标系一致（action 在机器人坐标系下）
+        # 参考: furniture_rl_sim_env.py::april_coord_to_robot_coord
+        pcds_sampled_robot = transform_pcd_april_to_robot(pcds_sampled_vis, device=furniture.device)
+        
+        pcd_animation_sequence.append(pcds_sampled_robot)
+        # draw_point_cloud(pcds_sampled_robot) # 阻塞式，需要关掉窗口才能显示下一个点云
         if visualizer is not None:
             # 持续更新当前帧，直到不再暂停或窗口关闭
             while True:
-                if not visualizer.update_point_cloud(pcds_sampled_vis):
+                if not visualizer.update_point_cloud(pcds_sampled_robot):
                     # 窗口关闭
                     break
                 if not visualizer.paused:

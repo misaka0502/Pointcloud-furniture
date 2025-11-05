@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
 坐标系转换工具
 
@@ -47,6 +48,11 @@ def get_april_to_robot_mat():
     """
     获取 AprilTag 到机器人基座的变换矩阵
     
+    注意：根据 furniture-bench/config.py 的注释：
+        "tag_base_from_robot_base: This can be used to convert the pose 
+         in the base tag's coordinate to the robot's coordinate."
+        即：tag_base_from_robot_base 实际上是 AprilTag -> Robot 的变换
+    
     Returns:
         4x4 numpy array: AprilTag -> Robot 的变换矩阵
     """
@@ -59,6 +65,8 @@ def get_april_to_robot_mat():
 def get_robot_to_april_mat():
     """
     获取机器人基座到 AprilTag 的变换矩阵
+    
+    这是 april_to_robot 的逆变换
     
     Returns:
         4x4 numpy array: Robot -> AprilTag 的变换矩阵
@@ -108,15 +116,93 @@ def robot_pose_to_april_pose(ee_pos, ee_quat, device='cuda:0'):
     return april_ee_pos, april_ee_quat_wxyz
 
 
+def transform_pcd_april_to_robot(pcd_april, device='cuda:0'):
+    """
+    将点云从 AprilTag 坐标系转换到机器人基座坐标系
+    
+    Args:
+        pcd_april: [..., 3] torch.Tensor, AprilTag 坐标系下的点云
+        device: torch device
+        
+    Returns:
+        pcd_robot: [..., 3] torch.Tensor, 机器人坐标系下的点云
+        
+    Examples:
+        >>> # 单个点云
+        >>> pcd = torch.rand(1000, 3)  # [N, 3]
+        >>> pcd_robot = transform_pcd_april_to_robot(pcd)
+        
+        >>> # 批量点云
+        >>> pcd_batch = torch.rand(32, 4096, 3)  # [B, N, 3]
+        >>> pcd_robot_batch = transform_pcd_april_to_robot(pcd_batch)
+    """
+    # 获取 AprilTag -> Robot 变换矩阵
+    april_to_robot_np = get_april_to_robot_mat()
+    april_to_robot = torch.tensor(april_to_robot_np, device=device, dtype=torch.float32)
+    
+    # 保存原始形状
+    original_shape = pcd_april.shape
+    
+    # 展平为 [N, 3]
+    pcd_flat = pcd_april.reshape(-1, 3)
+    
+    # 转换为齐次坐标 [N, 4]
+    ones = torch.ones(pcd_flat.shape[0], 1, device=device, dtype=pcd_flat.dtype)
+    pcd_homogeneous = torch.cat([pcd_flat, ones], dim=1)  # [N, 4]
+    
+    # 应用变换: [N, 4] @ [4, 4]^T = [N, 4]
+    pcd_robot_homogeneous = pcd_homogeneous @ april_to_robot.T
+    
+    # 提取前3维并恢复原始形状
+    pcd_robot = pcd_robot_homogeneous[:, :3].reshape(original_shape)
+    
+    return pcd_robot
+
+
+def transform_pcd_robot_to_april(pcd_robot, device='cuda:0'):
+    """
+    将点云从机器人基座坐标系转换到 AprilTag 坐标系
+    
+    Args:
+        pcd_robot: [..., 3] torch.Tensor, 机器人坐标系下的点云
+        device: torch device
+        
+    Returns:
+        pcd_april: [..., 3] torch.Tensor, AprilTag 坐标系下的点云
+    """
+    # 获取 Robot -> AprilTag 变换矩阵
+    robot_to_april_np = get_robot_to_april_mat()
+    robot_to_april = torch.tensor(robot_to_april_np, device=device, dtype=torch.float32)
+    
+    # 保存原始形状
+    original_shape = pcd_robot.shape
+    
+    # 展平为 [N, 3]
+    pcd_flat = pcd_robot.reshape(-1, 3)
+    
+    # 转换为齐次坐标 [N, 4]
+    ones = torch.ones(pcd_flat.shape[0], 1, device=device, dtype=pcd_flat.dtype)
+    pcd_homogeneous = torch.cat([pcd_flat, ones], dim=1)  # [N, 4]
+    
+    # 应用变换: [N, 4] @ [4, 4]^T = [N, 4]
+    pcd_april_homogeneous = pcd_homogeneous @ robot_to_april.T
+    
+    # 提取前3维并恢复原始形状
+    pcd_april = pcd_april_homogeneous[:, :3].reshape(original_shape)
+    
+    return pcd_april
+
+
 if __name__ == '__main__':
     print("=" * 70)
     print("坐标系转换矩阵")
     print("=" * 70)
     
-    # AprilTag -> Robot
+    # AprilTag -> Robot  
     april_to_robot = get_april_to_robot_mat()
     print("\nAprilTag -> Robot (tag_base_from_robot_base):")
     print(april_to_robot)
+    print("注：根据 furniture-bench 注释，这个矩阵用于将 AprilTag 坐标转换到机器人坐标")
     
     # Robot -> AprilTag
     robot_to_april = get_robot_to_april_mat()
