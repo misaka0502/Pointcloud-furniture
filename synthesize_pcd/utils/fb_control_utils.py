@@ -507,3 +507,66 @@ def quat_to_angle_axis(q):
     mask_expand = mask.unsqueeze(-1)
     axis = torch.where(mask_expand, axis, default_axis)
     return angle, axis
+
+# @torch.jit.script
+def rotation_6d_to_matrix_simple(d6):
+    """
+    将 6D 旋转表示转换为旋转矩阵 (Gram-Schmidt 正交化)
+    
+    参考：furniture_bench/controllers/control_utils.py::rotation_6d_to_matrix
+    
+    Args:
+        d6: [6] 6D 旋转向量
+    Returns:
+        rot_mat: [3, 3] 旋转矩阵（行向量形式）
+    """
+    a1, a2 = d6[:3], d6[3:]
+    
+    # 正交化
+    b1 = torch.nn.functional.normalize(a1, dim=0)
+    b2 = a2 - (b1 * a2).sum() * b1
+    b2 = torch.nn.functional.normalize(b2, dim=0)
+    b3 = torch.cross(b1, b2)
+    
+    # 关键修复：按行堆叠，而不是按列！
+    # dim=0 表示在第0维（行）堆叠，得到 [3, 3] 矩阵
+    # 其中第1行是 b1，第2行是 b2，第3行是 b3
+    return torch.stack([b1, b2, b3], dim=0)
+
+# @torch.jit.script
+def rotation_matrix_to_quaternion_simple(rot_mat):
+    """
+    将旋转矩阵转换为四元数
+    Args:
+        rot_mat: [3, 3] 旋转矩阵
+    Returns:
+        quat: [4] 四元数 (w, x, y, z)
+    """
+    trace = rot_mat[0, 0] + rot_mat[1, 1] + rot_mat[2, 2]
+    
+    if trace > 0:
+        s = 0.5 / torch.sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (rot_mat[2, 1] - rot_mat[1, 2]) * s
+        y = (rot_mat[0, 2] - rot_mat[2, 0]) * s
+        z = (rot_mat[1, 0] - rot_mat[0, 1]) * s
+    elif rot_mat[0, 0] > rot_mat[1, 1] and rot_mat[0, 0] > rot_mat[2, 2]:
+        s = 2.0 * torch.sqrt(1.0 + rot_mat[0, 0] - rot_mat[1, 1] - rot_mat[2, 2])
+        w = (rot_mat[2, 1] - rot_mat[1, 2]) / s
+        x = 0.25 * s
+        y = (rot_mat[0, 1] + rot_mat[1, 0]) / s
+        z = (rot_mat[0, 2] + rot_mat[2, 0]) / s
+    elif rot_mat[1, 1] > rot_mat[2, 2]:
+        s = 2.0 * torch.sqrt(1.0 + rot_mat[1, 1] - rot_mat[0, 0] - rot_mat[2, 2])
+        w = (rot_mat[0, 2] - rot_mat[2, 0]) / s
+        x = (rot_mat[0, 1] + rot_mat[1, 0]) / s
+        y = 0.25 * s
+        z = (rot_mat[1, 2] + rot_mat[2, 1]) / s
+    else:
+        s = 2.0 * torch.sqrt(1.0 + rot_mat[2, 2] - rot_mat[0, 0] - rot_mat[1, 1])
+        w = (rot_mat[1, 0] - rot_mat[0, 1]) / s
+        x = (rot_mat[0, 2] + rot_mat[2, 0]) / s
+        y = (rot_mat[1, 2] + rot_mat[2, 1]) / s
+        z = 0.25 * s
+    
+    return torch.tensor([w, x, y, z], device=rot_mat.device, dtype=rot_mat.dtype)
