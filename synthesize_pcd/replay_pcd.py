@@ -5,21 +5,16 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 sys.path.insert(0, '/home2/zxp/Projects/Juicer_ws/juicer')
 
 from utils.read_dataset import read_zarr
-from utils.get_pcd_from_npy import get_pcd_from_offline_data
-import utils.fb_control_utils as C
 import torch
-from utils.furniture import Furniture, sample_points
+from utils.furniture import sample_points
 from utils.visualizer import PointCloudVisualizer
 from tqdm import tqdm
-from utils.gripper_pcd_utils import synthesize_gripper_pcd
 import time
 import argparse
+import numpy as np
 
 # 默认数据路径
-DEFAULT_DATA_PATH = "/home/rlg3/projects/6D-Manipulation/data/processed/diffik/sim/one_leg/teleop/low/success.zarr"
-# 使用绝对路径，确保从任何位置运行都能找到资源
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ASSET_PATH = os.path.join(SCRIPT_DIR, 'assets/furniture_bench/mesh/square_table')
+DEFAULT_DATA_PATH = "/home/rlg3/projects/6D-Manipulation/data/one_leg_seperate_part_with_gripper.zarr"
 
 def replay_point_cloud_animation(zarr_path, num_frames=None, fps=30, device='cuda:0', skip_frames=1):
     """
@@ -35,8 +30,18 @@ def replay_point_cloud_animation(zarr_path, num_frames=None, fps=30, device='cud
     print(f"正在加载数据从: {zarr_path}")
     data = read_zarr(zarr_path)
     
-    # 获取总帧数
-    total_frames = len(data['parts_poses'])
+    # 检查数据集中是否有预生成的点云
+    has_pregenerated_pcds = 'furniture_pcds' in data and 'gripper_pcds' in data
+    
+    if has_pregenerated_pcds:
+        print("✓ 检测到预生成的点云数据，将直接读取")
+        # 获取总帧数
+        total_frames = len(data['gripper_pcds'])
+    else:
+        print("✗ 未检测到预生成的点云数据")
+        print("请使用包含 'furniture_pcds' 和 'gripper_pcds' 的数据集")
+        return
+    
     if num_frames is None:
         num_frames = total_frames
     else:
@@ -44,14 +49,12 @@ def replay_point_cloud_animation(zarr_path, num_frames=None, fps=30, device='cud
     
     print(f"总帧数: {total_frames}, 将播放: {num_frames} 帧")
     
-    # 初始化家具点云加载器
-    print(f"正在加载家具资产从: {ASSET_PATH}")
-    furniture = Furniture(ASSET_PATH, device=device, downsample_voxel_size=0.001)
-    
-    # 加载夹爪点云数据
-    print("正在加载夹爪点云...")
-    gripper_pcds = get_pcd_from_offline_data(ASSET_PATH, device=device)
-    print(f"加载了夹爪点云: {list(gripper_pcds.keys())}")
+    # 打印点云数据信息
+    print("\n点云数据信息:")
+    print(f"  - 夹爪点云: {data['gripper_pcds'].shape}")
+    if 'furniture_pcds' in data:
+        for part_name in data['furniture_pcds'].keys():
+            print(f"  - {part_name}: {data['furniture_pcds'][part_name].shape}")
     
     # 初始化可视化器
     print("正在初始化可视化器...")
@@ -69,48 +72,32 @@ def replay_point_cloud_animation(zarr_path, num_frames=None, fps=30, device='cud
     for i in tqdm(frame_indices, desc="播放进度"):
         start_time = time.time()
         
-        # 准备家具部件位姿字典
-        part_pose = {}
-        part_pose['square_table_top'] = torch.tensor(data['parts_poses'][i, 0:7], device=device).unsqueeze(0)
-        part_pose['square_table_leg1'] = torch.tensor(data['parts_poses'][i, 7:14], device=device).unsqueeze(0)
-        part_pose['square_table_leg2'] = torch.tensor(data['parts_poses'][i, 14:21], device=device).unsqueeze(0)
-        part_pose['square_table_leg3'] = torch.tensor(data['parts_poses'][i, 21:28], device=device).unsqueeze(0)
-        part_pose['square_table_leg4'] = torch.tensor(data['parts_poses'][i, 28:35], device=device).unsqueeze(0)
+        # 直接从数据集读取预生成的点云
+        # 读取夹爪点云 [636, 3]
+        gripper_pcd = torch.tensor(data['gripper_pcds'][i], device=device, dtype=torch.float32)
         
-        # 获取夹爪位姿
-        action_pos = data['action/pos'][i]
-        robot_state = data['robot_state'][i]
-        ee_pos_robot = torch.tensor(robot_state[:3], device=device, dtype=torch.float32)
-        ee_rot_6d_robot = torch.tensor(robot_state[3:9], device=device, dtype=torch.float32)
-        gripper_width = robot_state[15]  # 实际夹爪宽度（米）
+        # 读取并合并所有家具部件点云
+        furniture_pcds_list = []
+        for part_name in ['square_table_top', 'square_table_leg1', 'square_table_leg2', 
+                          'square_table_leg3', 'square_table_leg4']:
+            if part_name in data['furniture_pcds']:
+                part_pcd = torch.tensor(data['furniture_pcds'][part_name][i], 
+                                       device=device, dtype=torch.float32)
+                furniture_pcds_list.append(part_pcd)
         
-        # 生成家具点云
-        furniture.get_pcd_from_offline_data(part_pose)
+        # 合并所有家具点云 [N_furniture, 3]
+        furniture_pcd = torch.cat(furniture_pcds_list, dim=0)
         
-        # 生成夹爪点云
-        gripper_pcd_world = synthesize_gripper_pcd(
-            ee_pos_robot=ee_pos_robot,
-            ee_rot_6d_robot=ee_rot_6d_robot,
-            gripper_width=gripper_width,
-            gripper_pcds=gripper_pcds,
-            device=device,
-            batch_size=1
-        )  # [1, N_total, 3]
+        # 添加 batch 维度
+        furniture_pcd = furniture_pcd.unsqueeze(0)  # [1, N_furniture, 3]
+        gripper_pcd = gripper_pcd.unsqueeze(0)  # [1, N_gripper, 3]
         
-        # 提取第一个环境的点云（家具 + 夹爪）
-        first_env_furniture = torch.cat(
-            [batched_pcd[0] for batched_pcd in furniture.parts_pcds_world.values()],
-            dim=0
-        ).unsqueeze(0)  # [1, ~214k, 3]
-        
-        first_env_gripper = gripper_pcd_world[0].unsqueeze(0)  # [1, N_total, 3]
-        
-        # 分别采样以控制点云密度
+        # 采样以控制点云密度
         gripper_vis_sample = 512
         furniture_vis_sample = 4096 - gripper_vis_sample
         
-        furniture_vis_sampled = sample_points(first_env_furniture, sample_num=furniture_vis_sample)
-        gripper_vis_sampled = sample_points(first_env_gripper, sample_num=gripper_vis_sample)
+        furniture_vis_sampled = sample_points(furniture_pcd, sample_num=furniture_vis_sample)
+        gripper_vis_sampled = sample_points(gripper_pcd, sample_num=gripper_vis_sample)
         
         # 合并用于可视化：家具采样 + 夹爪采样
         pcds_sampled_vis = torch.cat([furniture_vis_sampled, gripper_vis_sampled], dim=1)
