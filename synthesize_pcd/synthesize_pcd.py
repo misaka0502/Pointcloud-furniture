@@ -211,6 +211,116 @@ def build_gripper_pcd_in_hand_frame(gripper_pcds, gripper_width, device):
     
     return gripper_pcd_local
 
+
+def synthesize_gripper_pcd(
+    ee_pos_robot,
+    ee_rot_6d_robot,
+    gripper_width,
+    gripper_pcds,
+    device,
+    batch_size=1,
+):
+    """
+    从 EE 状态合成完整的夹爪点云（世界坐标系）
+    
+    这是一个高级接口，封装了完整的夹爪点云生成流程：
+    1. 坐标系转换（Robot Frame → April Tag Frame）
+    2. 在 EE 局部坐标系构建夹爪点云
+    3. 变换到世界坐标系
+    
+    Args:
+        ee_pos_robot: [N, 3] or [3], EE 位置（Robot Frame）
+        ee_rot_6d_robot: [N, 6] or [6], EE 姿态 6D rotation（Robot Frame）
+        gripper_width: [N] or float, 夹爪宽度
+        gripper_pcds: dict, 包含 'finger_0' 和 'finger_1' 的齐次坐标 [N_points, 4]
+        device: torch device
+        batch_size: int, 批次大小（默认 1）
+    
+    Returns:
+        gripper_pcd_world: [N, N_total, 3], 世界坐标系中的夹爪点云
+        
+    Examples:
+        >>> # 单帧处理
+        >>> gripper_pcd = synthesize_gripper_pcd(
+        ...     ee_pos_robot=torch.tensor([0.5, 0.2, 0.3]),
+        ...     ee_rot_6d_robot=torch.tensor([1, 0, 0, 0, 1, 0]),
+        ...     gripper_width=0.065,
+        ...     gripper_pcds=gripper_pcds,
+        ...     device='cuda'
+        ... )
+        >>> print(gripper_pcd.shape)  # [1, 636, 3]
+        
+        >>> # 批量处理
+        >>> gripper_pcds_batch = synthesize_gripper_pcd(
+        ...     ee_pos_robot=ee_positions,  # [N, 3]
+        ...     ee_rot_6d_robot=ee_rotations,  # [N, 6]
+        ...     gripper_width=gripper_widths,  # [N]
+        ...     gripper_pcds=gripper_pcds,
+        ...     device='cuda',
+        ...     batch_size=N
+        ... )
+    """
+    # 确保输入是 tensor
+    if not isinstance(ee_pos_robot, torch.Tensor):
+        ee_pos_robot = torch.tensor(ee_pos_robot, device=device, dtype=torch.float32)
+    if not isinstance(ee_rot_6d_robot, torch.Tensor):
+        ee_rot_6d_robot = torch.tensor(ee_rot_6d_robot, device=device, dtype=torch.float32)
+    if not isinstance(gripper_width, torch.Tensor):
+        gripper_width = torch.tensor(
+            [gripper_width] if isinstance(gripper_width, (int, float)) else gripper_width,
+            device=device,
+            dtype=torch.float32
+        )
+    
+    # 确保是批次形式
+    if ee_pos_robot.dim() == 1:
+        ee_pos_robot = ee_pos_robot.unsqueeze(0)  # [1, 3]
+    if ee_rot_6d_robot.dim() == 1:
+        ee_rot_6d_robot = ee_rot_6d_robot.unsqueeze(0)  # [1, 6]
+    if gripper_width.dim() == 0:
+        gripper_width = gripper_width.unsqueeze(0)  # [1]
+    
+    N = ee_pos_robot.shape[0]
+    
+    # 存储所有批次的结果
+    gripper_pcds_world_list = []
+    
+    for i in range(N):
+        # 1. 转换旋转表示: 6D → 旋转矩阵 → 四元数
+        ee_rot_mat_robot = rotation_6d_to_matrix_simple(ee_rot_6d_robot[i])
+        ee_quat_robot = rotation_matrix_to_quaternion_simple(ee_rot_mat_robot)
+        
+        # 2. 坐标系转换: Robot Frame → April Tag Frame
+        ee_pos_april, ee_quat_april = robot_pose_to_april_pose(
+            ee_pos_robot[i], ee_quat_robot, device
+        )
+        
+        # 3. 在 EE 局部坐标系中构建夹爪点云
+        gripper_pcd_local = build_gripper_pcd_in_hand_frame(
+            gripper_pcds, gripper_width[i].item(), device
+        )
+        
+        # 4. 构建位姿变换矩阵
+        gripper_pose_mat = C.batched_pose2mat(
+            ee_pos_april.unsqueeze(0),
+            ee_quat_april.unsqueeze(0),
+            device
+        )  # [1, 4, 4]
+        
+        # 5. 变换到世界坐标系
+        gripper_pcd_world = torch.matmul(
+            gripper_pcd_local.unsqueeze(0),
+            gripper_pose_mat.transpose(1, 2)
+        )[:, :, :3]  # [1, N_total, 3]
+        
+        gripper_pcds_world_list.append(gripper_pcd_world)
+    
+    # 合并所有批次
+    gripper_pcd_world = torch.cat(gripper_pcds_world_list, dim=0)  # [N, N_total, 3]
+    
+    return gripper_pcd_world
+
+
 def main():
     data = read_zarr(DATA_PATH)
     
@@ -247,77 +357,34 @@ def main():
         # 使用 robot_state 中的实际夹爪宽度，而不是 action 中的归一化值
         gripper_width = robot_state[15]  # 实际夹爪宽度（米）
         
-        # 将 EE 位姿从机器人基座坐标系转换到 AprilTag 坐标系
-        # 1. 先将 6D 旋转转换为四元数
-        ee_rot_mat = rotation_6d_to_matrix_simple(ee_rot_6d_robot)
-        ee_quat_robot = rotation_matrix_to_quaternion_simple(ee_rot_mat)  # [4] (w,x,y,z)
+        # ✅ 使用高级函数生成夹爪点云（封装了完整流程）
+        gripper_pcd_world = synthesize_gripper_pcd(
+            ee_pos_robot=ee_pos_robot,
+            ee_rot_6d_robot=ee_rot_6d_robot,
+            gripper_width=gripper_width,
+            gripper_pcds=gripper_pcds,
+            device=furniture.device,
+            batch_size=N_ENVS
+        )  # [N_env, N_total, 3]
         
-        # 2. 坐标系转换：Robot -> AprilTag
-        ee_pos_april, ee_quat_april = robot_pose_to_april_pose(
-            ee_pos_robot, ee_quat_robot, furniture.device
-        )
+        # 转换到 AprilTag 坐标系用于存储 ee_pose（用于可视化等）
+        # ee_rot_mat = rotation_6d_to_matrix_simple(ee_rot_6d_robot)
+        # ee_quat_robot = rotation_matrix_to_quaternion_simple(ee_rot_mat)
+        # ee_pos_april, ee_quat_april = robot_pose_to_april_pose(
+        #     ee_pos_robot, ee_quat_robot, furniture.device
+        # )
+        # ee_pose = torch.cat([ee_pos_april, ee_quat_april])  # [7]
+        # part_pose['gripper'] = ee_pose.unsqueeze(0).expand(N_ENVS, -1)  # [N_env, 7]
         
-        # 3. 将四元数转回旋转矩阵
-        # 注意：C.quaternion_to_matrix 期望 (x,y,z,w) 格式
-        ee_quat_april_xyzw = torch.cat([ee_quat_april[1:], ee_quat_april[0:1]])  # (w,x,y,z) -> (x,y,z,w)
-        ee_rot_mat_april = C.quaternion_to_matrix(ee_quat_april_xyzw.unsqueeze(0)).squeeze(0)
-        
-        # ✅ 使用新方法：直接存储 hand 的位姿，不需要单独计算左右 finger
-        # ee_pose = (pos[3] + quat[4])  quat 格式为 (w,x,y,z)
-        ee_pose = torch.cat([ee_pos_april, ee_quat_april])  # [7]
-        part_pose['gripper'] = ee_pose.unsqueeze(0).expand(N_ENVS, -1)  # [N_env, 7]
         if i == 0:
             print_gpu_memory_usage(furniture.device, "begin to synthesize point cloud")
         
         if COMPUTE_FPS:
-            # 强制 CPU 等待 GPU 完成上一帧的所有工作
             torch.cuda.synchronize()
             start_time = time.perf_counter()
 
         # 处理家具点云合成
         furniture.get_pcd_from_offline_data(part_pose)
-        
-        # ✅ 处理夹爪点云：先在局部坐标系构建，再整体变换
-        if 'finger_0' in gripper_pcds and 'finger_1' in gripper_pcds:
-            # 1. 在 hand 局部坐标系中构建完整的夹爪点云
-            gripper_pcd_local = build_gripper_pcd_in_hand_frame(
-                gripper_pcds, gripper_width, furniture.device
-            )  # [N_total, 4]
-            
-            # 2. 用 ee_pose 将整个夹爪变换到世界坐标系
-            gripper_pose = part_pose['gripper']  # [N_env, 7] (pos[3] + quat[4], quat 为 w,x,y,z)
-            
-            # ✅ batched_pose2mat 接受 (w,x,y,z) 格式，不需要转换
-            gripper_pose_mat = C.batched_pose2mat(
-                gripper_pose[:, :3],      # [N_env, 3] 位置
-                gripper_pose[:, 3:7],     # [N_env, 4] 四元数 (w,x,y,z)
-                furniture.device
-            )  # [N_env, 4, 4]
-            
-            # 3. 广播 gripper_pcd_local 到所有环境
-            n_envs = gripper_pose_mat.shape[0]
-            gripper_pcd_local_expanded = gripper_pcd_local.unsqueeze(0).expand(n_envs, -1, -1)  # [N_env, N_total, 4]
-            
-            # 4. 应用变换
-            gripper_pcd_world = torch.matmul(
-                gripper_pcd_local_expanded,
-                gripper_pose_mat.transpose(1, 2)
-            )[:, :, :3]  # [N_env, N_total, 3]
-        
-        # 分别采样家具和夹爪点云，避免夹爪被过度稀疏化
-        furniture_pcd = torch.cat(list(furniture.parts_pcds_world.values()), dim=1)  # [N_env, ~214k, 3]
-        # gripper_pcd_world 现在是一个整体的张量，不是字典
-        gripper_pcd = gripper_pcd_world  # [N_env, N_total, 3]
-        
-        # 为夹爪分配固定采样点数
-        gripper_sample_num = 512
-        furniture_sample_num = 4096 - gripper_sample_num  # 3584 个点
-        
-        furniture_sampled = sample_points(furniture_pcd, sample_num=furniture_sample_num)
-        gripper_sampled = sample_points(gripper_pcd, sample_num=gripper_sample_num)
-        
-        # 合并：家具采样 + 夹爪采样
-        pcds_sampled = torch.cat([furniture_sampled, gripper_sampled], dim=1)  # [N_env, 4096, 3]
         
         if i == 0:
             print_gpu_memory_usage(furniture.device, "finish synthesize point cloud")
@@ -339,7 +406,7 @@ def main():
         first_env_gripper = gripper_pcd_world[0].unsqueeze(0)  # [1, N_total, 3]
         
         # 分别采样
-        gripper_vis_sample = 512
+        gripper_vis_sample = 256
         furniture_vis_sample = 4096 - gripper_vis_sample
         
         furniture_vis_sampled = sample_points(first_env_furniture, sample_num=furniture_vis_sample)
@@ -356,9 +423,9 @@ def main():
                     # 窗口关闭
                     break
                 if not visualizer.paused:
+                    time.sleep(0.01)
                     # 未暂停，推进到下一帧
                     break
-                time.sleep(0.01)  # 暂停时降低 CPU 使用
             
             # 如果窗口已关闭，退出主循环
             if not visualizer.keep_running:
